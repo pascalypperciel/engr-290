@@ -7,10 +7,19 @@
 #include <stdio.h>
 #include <stdbool.h>
 
-#define US_1_TRIGGER_PIN  PB3
-#define US_1_ECHO_PIN     PD2
-#define US_2_TRIGGER_PIN  PB5
-#define US_2_ECHO_PIN     PD3
+typedef struct {
+    int ECHO_PIN;
+    int TRIGGER_PIN;
+    int ID;
+} UltrasonicSensor;
+
+typedef struct {
+    int INPUT_PIN;
+} ServoMotor;
+
+UltrasonicSensor  US_1 = {PD2, PB3, 1};
+UltrasonicSensor  US_2 = {PD3, PB5, 2};
+ServoMotor        SERVO = {PB2};
 
 void UART_init(unsigned int baud) {
     unsigned int ubrr = F_CPU/16/baud-1;
@@ -32,30 +41,34 @@ void UART_sendString(const char *str) {
 }
 
 void init_ports() {
-    DDRB |= (1 << US_1_TRIGGER_PIN);
-    DDRB |= (1 << US_2_TRIGGER_PIN);
-    DDRD &= ~(1 << US_1_ECHO_PIN);
-    DDRD &= ~(1 << US_2_ECHO_PIN);
+    // Outputs
+    DDRB |= (1 << US_1.TRIGGER_PIN);
+    DDRB |= (1 << US_2.TRIGGER_PIN);
+    DDRB |= (1 << SERVO.INPUT_PIN);
+
+    //Inputs
+    DDRD &= ~(1 << US_1.ECHO_PIN);
+    DDRD &= ~(1 << US_2.ECHO_PIN);
 }
 
-uint32_t measure_distance(int TRIG_PIN, int ECHO_PIN) {
+uint32_t measure_distance(UltrasonicSensor US, bool display_distance) {
     // Send a 10us pulse to trigger pin
-    PORTB &= ~(1 << TRIG_PIN);
+    PORTB &= ~(1 << US.TRIGGER_PIN);
     _delay_us(2);
-    PORTB |= (1 << TRIG_PIN);
+    PORTB |= (1 << US.TRIGGER_PIN);
     _delay_us(10);
-    PORTB &= ~(1 << TRIG_PIN);
+    PORTB &= ~(1 << US.TRIGGER_PIN);
 
     // Measure the duration of the pulse from echo pin
     unsigned long duration = 0;
     unsigned long max_duration = F_CPU / 10;
-    while (!(PIND & (1 << ECHO_PIN))) {
+    while (!(PIND & (1 << US.ECHO_PIN))) {
         if (duration++ >= max_duration) return -1;
         _delay_us(1);
     }
     TCNT1 = 0;
     TCCR1B |= (1 << CS11);
-    while (PIND & (1 << ECHO_PIN)) {
+    while (PIND & (1 << US.ECHO_PIN)) {
         if (TCNT1 > max_duration) return -1;
     }
     TCCR1B &= ~(1 << CS11);
@@ -63,33 +76,36 @@ uint32_t measure_distance(int TRIG_PIN, int ECHO_PIN) {
     // Calculate distance in centimeters
     float time_taken = TCNT1 * (8.0 / F_CPU);
     float distance = (time_taken * 34300.0) / 2.0;
-
+    
+    if (1) {
+      display_distances(distance, US.ID);
+    }
+    
     return distance;
 }
 
-void display_distances() {
-    float distance1, distance2;
+void display_distances(float distance, int id) {
     char buffer[32];
-    
-    distance1 = measure_distance(US_1_TRIGGER_PIN, US_1_ECHO_PIN);
-    if (distance1 == -1) {
-        _delay_ms(500);
-        return;
-    }
     char distance_buffer[16];
-    dtostrf(distance1, 6, 2, distance_buffer);
-    snprintf(buffer, sizeof(buffer), "\nDistance 1 = %s cm\r\t", distance_buffer);
-    UART_sendString(buffer);
     
-    distance2 = measure_distance(US_2_TRIGGER_PIN, US_2_ECHO_PIN);
-    if (distance2 == -1) {
+    if (distance == -1) {
         _delay_ms(500);
         return;
     }
-    distance_buffer[16];
-    dtostrf(distance2, 6, 2, distance_buffer);
-    snprintf(buffer, sizeof(buffer), "Distance 2 = %s cm\r", distance_buffer);
+    dtostrf(distance, 6, 2, distance_buffer);
+    snprintf(buffer, sizeof(buffer), "Distance %d = %s cm\r\t", id, distance_buffer);
     UART_sendString(buffer);
+}
+
+void move_fan() {
+    // Get distances (and displays them if boolean is true)
+    float distance1 = measure_distance(US_1, true);
+    float distance2 = measure_distance(US_2, true);
+
+    int difference = (int)(distance1 - distance2);
+    if (difference < 0) {
+        difference = -difference;
+    }
 }
 
 int main(void) {
@@ -98,7 +114,8 @@ int main(void) {
     UART_init(9600);
     
     while (1) {
-      display_distances();
+      UART_sendString("\n");\
+      move_fan();
     }
     
     return 0;
