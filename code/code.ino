@@ -1,5 +1,5 @@
 #ifndef F_CPU
-#define F_CPU 16000000
+#define F_CPU 16000000UL
 #endif // F_CPU
 
 #include <avr/io.h>
@@ -8,13 +8,13 @@
 #include <stdbool.h>
 
 typedef struct {
-    int ECHO_PIN;
-    int TRIGGER_PIN;
-    int ID;
+    uint8_t ECHO_PIN;
+    uint8_t TRIGGER_PIN;
+    uint8_t ID;
 } UltrasonicSensor;
 
 typedef struct {
-    int INPUT_PIN;
+    uint8_t INPUT_PIN;
 } ServoMotor;
 
 UltrasonicSensor  US_1 = {PD2, PB3, 1};
@@ -22,15 +22,15 @@ UltrasonicSensor  US_2 = {PD3, PB5, 2};
 ServoMotor        SERVO = {PB2};
 
 void UART_init(unsigned int baud) {
-    unsigned int ubrr = F_CPU/16/baud-1;
-    UBRR0H = (unsigned char)(ubrr>>8);
+    unsigned int ubrr = F_CPU / 16 / baud - 1;
+    UBRR0H = (unsigned char)(ubrr >> 8);
     UBRR0L = (unsigned char)ubrr;
-    UCSR0B = (1<<RXEN0)|(1<<TXEN0);
-    UCSR0C = (1<<USBS0)|(3<<UCSZ00);
+    UCSR0B = (1 << RXEN0) | (1 << TXEN0);
+    UCSR0C = (1 << USBS0) | (3 << UCSZ00);
 }
 
 void UART_sendChar(unsigned char data) {
-    while (!(UCSR0A & (1<<UDRE0)));
+    while (!(UCSR0A & (1 << UDRE0)));
     UDR0 = data;
 }
 
@@ -61,26 +61,37 @@ uint32_t measure_distance(UltrasonicSensor US, bool display_distance) {
 
     // Measure the duration of the pulse from echo pin
     unsigned long duration = 0;
-    unsigned long max_duration = F_CPU / 10;
+    unsigned long overflow_count = 0;
+    unsigned long max_overflows = 0xFFFF / 256;
+
     while (!(PIND & (1 << US.ECHO_PIN))) {
-        if (duration++ >= max_duration) return -1;
+        if (overflow_count >= max_overflows) return -1;
         _delay_us(1);
     }
-    TCNT1 = 0;
-    TCCR1B |= (1 << CS11);
-    while (PIND & (1 << US.ECHO_PIN)) {
-        if (TCNT1 > max_duration) return -1;
-    }
-    TCCR1B &= ~(1 << CS11);
 
-    // Calculate distance in centimeters
-    float time_taken = TCNT1 * (8.0 / F_CPU);
-    float distance = (time_taken * 34300.0) / 2.0;
-    
-    if (1) {
-      display_distances(distance, US.ID);
+    TCNT2 = 0;
+    TCCR2B |= (1 << CS21);
+
+    while (PIND & (1 << US.ECHO_PIN)) {
+        if (TCNT2 == 0) {
+            overflow_count++;
+            if (overflow_count >= max_overflows) {
+                TCCR2B &= ~(1 << CS21);
+                return -1;
+            }
+        }
     }
-    
+
+    TCCR2B &= ~(1 << CS21);
+
+    duration = overflow_count * 256 + TCNT2;
+    float time_taken = duration * (8.0 / F_CPU);
+    float distance = (time_taken * 34300.0);
+
+    if (display_distance) {
+        display_distances(distance, US.ID);
+    }
+
     return distance;
 }
 
@@ -88,12 +99,9 @@ void display_distances(float distance, int id) {
     char buffer[32];
     char distance_buffer[16];
     
-    if (distance == -1) {
-        _delay_ms(500);
-        return;
-    }
     dtostrf(distance, 6, 2, distance_buffer);
     snprintf(buffer, sizeof(buffer), "Distance %d = %s cm\r\t", id, distance_buffer);
+    
     UART_sendString(buffer);
 }
 
@@ -103,9 +111,8 @@ void move_fan() {
     float distance2 = measure_distance(US_2, true);
 
     int difference = (int)(distance1 - distance2);
-    if (difference < 0) {
-        difference = -difference;
-    }
+
+    // Set servo anglo (TO DO)
 }
 
 int main(void) {
@@ -113,9 +120,9 @@ int main(void) {
     init_ports();
     UART_init(9600);
     
-    while (1) {
-      UART_sendString("\n");\
-      move_fan();
+    while (1) {        
+        UART_sendString("\n");
+        move_fan();
     }
     
     return 0;
