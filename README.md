@@ -1,14 +1,16 @@
 # ENGR 290 Hovercraft Project
 
-Note:
-We will be using P6 and P13 for the US sensors.
+Ports:
+P6  Front US sensors
+P13 Side US sensors
+P3  Lift fan
+P4  Steer fan
 
 
-to-do list (codewise)
-
+TO-DO list:
 - [x] Get reading from sensors
 - [x] Get servo motor to move to a selected angle
-- [ ] Have lift fan always running
-- [ ] Direction fan run dynamically
+- [x] Have lift fan always running
+- [x] Direction fan run dynamically
 - [ ] Make algorithm to time everything
 - [ ] Have the thing calibrated with IMU
