@@ -5,6 +5,7 @@ Ports:
 - P13 Side US sensors
 - P3  Lift fan
 - P4  Steer fan
+- P15  Servo motor
 
 
 TO-DO list:
