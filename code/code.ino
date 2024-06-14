@@ -30,7 +30,7 @@ typedef struct {
 // Components
 UltrasonicSensor  US_FRONT = {PD2, PB3, 1};
 UltrasonicSensor  US_SIDE = {PD3, PB5, 2};
-ServoMotor        SERVO = {PB2};
+ServoMotor        SERVO = {PB1};
 FAN               FAN_LIFT = {PD5};
 FAN               FAN_STEER = {PD6};
 
@@ -113,7 +113,7 @@ void SERVO_init_timer1() {
     TCCR1B |= (1 << CS11);
     TCCR1A |= (1 << WGM11) | (1 << WGM10);
     TCCR1B |= (1 << WGM12) | (1 << CS11);
-    TCCR1A |= (1 << COM1B1);
+    TCCR1A |= (1 << COM1A1);
     
     #if F_CPU >= 8000000L
     TCCR1B |= (1 << CS10);
@@ -143,7 +143,7 @@ void SERVO_move_servo(int angle) {
     
     int dutyCycle = (angle * 4) - ANGLE_CORRECTOR;
     
-    OCR1B = dutyCycle;
+    OCR1A = dutyCycle;
 }
 
 void FAN_init() {
