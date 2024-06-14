@@ -1,10 +1,10 @@
 # ENGR 290 Hovercraft Project
 
 Ports:
-P6  Front US sensors
-P13 Side US sensors
-P3  Lift fan
-P4  Steer fan
+- P6  Front US sensors
+- P13 Side US sensors
+- P3  Lift fan
+- P4  Steer fan
 
 
 TO-DO list:
