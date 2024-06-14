@@ -95,9 +95,15 @@ void SENSORS_display_distances(float distance, int id) {
 }
 
 void SERVO_init_timer1() {
+    TCCR1B = 0;
+    TCCR1B |= (1 << CS11);
     TCCR1A |= (1 << WGM11) | (1 << WGM10);
     TCCR1B |= (1 << WGM12) | (1 << CS11);
     TCCR1A |= (1 << COM1B1);
+    
+    #if F_CPU >= 8000000L
+    TCCR1B |= (1 << CS10);
+    #endif
 }
 
 void SERVO_change_angle(int initial, int final) {
@@ -126,6 +132,10 @@ void SERVO_move_servo(int angle) {
     OCR1B = dutyCycle;
 }
 
+void GENERAL_init_interrupts() {
+    SREG |= (1 << 7);
+}
+
 void GENERAL_init_ports() {
     // Outputs
     DDRB |= (1 << US_1.TRIGGER_PIN);
@@ -138,9 +148,8 @@ void GENERAL_init_ports() {
 }
 
 int main(void) {
-    init(); //Need to remove this, Arduino library
-    
     // Initialize ports, UART, and servo
+    GENERAL_init_interrupts();
     GENERAL_init_ports();
     UART_init();
     SERVO_init_timer1();
