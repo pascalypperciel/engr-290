@@ -7,7 +7,8 @@ We will be using P6 and P13 for the US sensors.
 to-do list (codewise)
 
 - [x] Get reading from sensors
-- [ ] Move servo acordingly
+- [x] Get servo motor to move to a selected angle
 - [ ] Have lift fan always running
-- [ ] Direction fan (tbd)
+- [ ] Direction fan run dynamically
+- [ ] Make algorithm to time everything
 - [ ] Have the thing calibrated with IMU
