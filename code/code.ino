@@ -4,9 +4,15 @@
 #include <stdbool.h>
 #include <avr/interrupt.h>
 
+// Values to tweak
 #define ANGLE_CORRECTOR 147
 #define SERVO_PAUSE_TIME 20000
 
+// Constants
+#define ON 255
+#define OFF 0
+
+// Structures
 typedef struct {
     uint8_t ECHO_PIN;
     uint8_t TRIGGER_PIN;
@@ -17,10 +23,18 @@ typedef struct {
     uint8_t INPUT_PIN;
 } ServoMotor;
 
+typedef struct {
+    uint8_t INPUT_PIN;
+} FAN;
+
+// Components
 UltrasonicSensor  US_1 = {PD2, PB3, 1};
 UltrasonicSensor  US_2 = {PD3, PB5, 2};
 ServoMotor        SERVO = {PB2};
+FAN               FAN_LIFT = {PD5};
+FAN               FAN_STEER = {PD6};
 
+// Functions
 void UART_init() {
     unsigned int ubrr = F_CPU / 16 / 9600 - 1;
     UBRR0H = (unsigned char)(ubrr >> 8);
@@ -127,9 +141,22 @@ void SERVO_move_servo(int angle) {
     if (angle < 0) angle = 0;
     if (angle > 180) angle = 180;
     
-    int dutyCycle = (angle * 4) - ANGLE_CORRECTOR; //This value is a trial and error thing
+    int dutyCycle = (angle * 4) - ANGLE_CORRECTOR;
     
     OCR1B = dutyCycle;
+}
+
+void FAN_init() {
+    TCCR0A |= (1 << WGM00) | (1 << WGM01) | (1 << COM0A1) | (1 << COM0B1);
+    TCCR0B |= (1 << CS01) | (1 << CS00);
+}
+
+void FAN_set_spin(FAN fan, int value) {
+  if (fan.INPUT_PIN == PD5) {
+    OCR0B = value;
+  } else if (fan.INPUT_PIN == PD6) {
+    OCR0A = value;
+  }
 }
 
 void GENERAL_init_interrupts() {
@@ -141,6 +168,8 @@ void GENERAL_init_ports() {
     DDRB |= (1 << US_1.TRIGGER_PIN);
     DDRB |= (1 << US_2.TRIGGER_PIN);
     DDRB |= (1 << SERVO.INPUT_PIN);
+    DDRD |= (1 << FAN_LIFT.INPUT_PIN);
+    DDRD |= (1 << FAN_STEER.INPUT_PIN);
 
     //Inputs
     DDRD &= ~(1 << US_1.ECHO_PIN);
@@ -153,14 +182,18 @@ int main(void) {
     GENERAL_init_ports();
     UART_init();
     SERVO_init_timer1();
+    FAN_init();
+    FAN_set_spin(FAN_LIFT, ON);
     
     while (1) {        
         UART_sendString("\n");
         SENSORS_measure_distance(US_1, true);
         SENSORS_measure_distance(US_2, true);
 
-        SERVO_change_angle(0,180);
-        SERVO_change_angle(180,0);
+        _delay_ms(10000);
+        FAN_set_spin(FAN_STEER, ON);
+        _delay_ms(10000);
+        FAN_set_spin(FAN_STEER, OFF);
         
     }
     
