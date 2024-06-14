@@ -1,11 +1,11 @@
-#ifndef F_CPU
-#define F_CPU 16000000UL
-#endif // F_CPU
-
 #include <avr/io.h>
 #include <util/delay.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <avr/interrupt.h>
+
+#define ANGLE_CORRECTOR 147
+#define SERVO_PAUSE_TIME 20000
 
 typedef struct {
     uint8_t ECHO_PIN;
@@ -21,8 +21,8 @@ UltrasonicSensor  US_1 = {PD2, PB3, 1};
 UltrasonicSensor  US_2 = {PD3, PB5, 2};
 ServoMotor        SERVO = {PB2};
 
-void UART_init(unsigned int baud) {
-    unsigned int ubrr = F_CPU / 16 / baud - 1;
+void UART_init() {
+    unsigned int ubrr = F_CPU / 16 / 9600 - 1;
     UBRR0H = (unsigned char)(ubrr >> 8);
     UBRR0L = (unsigned char)ubrr;
     UCSR0B = (1 << RXEN0) | (1 << TXEN0);
@@ -40,18 +40,7 @@ void UART_sendString(const char *str) {
     }
 }
 
-void init_ports() {
-    // Outputs
-    DDRB |= (1 << US_1.TRIGGER_PIN);
-    DDRB |= (1 << US_2.TRIGGER_PIN);
-    DDRB |= (1 << SERVO.INPUT_PIN);
-
-    //Inputs
-    DDRD &= ~(1 << US_1.ECHO_PIN);
-    DDRD &= ~(1 << US_2.ECHO_PIN);
-}
-
-uint32_t measure_distance(UltrasonicSensor US, bool display_distance) {
+uint32_t SENSORS_measure_distance(UltrasonicSensor US, bool display_distance) {
     // Send a 10us pulse to trigger pin
     PORTB &= ~(1 << US.TRIGGER_PIN);
     _delay_us(2);
@@ -89,13 +78,13 @@ uint32_t measure_distance(UltrasonicSensor US, bool display_distance) {
     float distance = (time_taken * 34300.0);
 
     if (display_distance) {
-        display_distances(distance, US.ID);
+        SENSORS_display_distances(distance, US.ID);
     }
 
     return distance;
 }
 
-void display_distances(float distance, int id) {
+void SENSORS_display_distances(float distance, int id) {
     char buffer[32];
     char distance_buffer[16];
     
@@ -105,24 +94,65 @@ void display_distances(float distance, int id) {
     UART_sendString(buffer);
 }
 
-void move_fan() {
-    // Get distances (and displays them if boolean is true)
-    float distance1 = measure_distance(US_1, true);
-    float distance2 = measure_distance(US_2, true);
+void SERVO_init_timer1() {
+    TCCR1A |= (1 << WGM11) | (1 << WGM10);
+    TCCR1B |= (1 << WGM12) | (1 << CS11);
+    TCCR1A |= (1 << COM1B1);
+}
 
-    int difference = (int)(distance1 - distance2);
+void SERVO_change_angle(int initial, int final) {
+    int stepper = 1;
+    if (initial > final) {
+        for (int pos = initial; pos >= final; pos--) {
+          SERVO_move_servo(pos);
+          _delay_us(SERVO_PAUSE_TIME);
+        }
+    } else if (initial < final) {
+        for (int pos = initial; pos <= final; pos++) {
+          SERVO_move_servo(pos);
+          _delay_us(SERVO_PAUSE_TIME);
+        }
+    } else {
+      return;
+    }
+}
 
-    // Set servo anglo (TO DO)
+void SERVO_move_servo(int angle) {
+    if (angle < 0) angle = 0;
+    if (angle > 180) angle = 180;
+    
+    int dutyCycle = (angle * 4) - ANGLE_CORRECTOR; //This value is a trial and error thing
+    
+    OCR1B = dutyCycle;
+}
+
+void GENERAL_init_ports() {
+    // Outputs
+    DDRB |= (1 << US_1.TRIGGER_PIN);
+    DDRB |= (1 << US_2.TRIGGER_PIN);
+    DDRB |= (1 << SERVO.INPUT_PIN);
+
+    //Inputs
+    DDRD &= ~(1 << US_1.ECHO_PIN);
+    DDRD &= ~(1 << US_2.ECHO_PIN);
 }
 
 int main(void) {
-    // Initialize ports and UART
-    init_ports();
-    UART_init(9600);
+    init(); //Need to remove this, Arduino library
+    
+    // Initialize ports, UART, and servo
+    GENERAL_init_ports();
+    UART_init();
+    SERVO_init_timer1();
     
     while (1) {        
         UART_sendString("\n");
-        move_fan();
+        SENSORS_measure_distance(US_1, true);
+        SENSORS_measure_distance(US_2, true);
+
+        SERVO_change_angle(0,180);
+        SERVO_change_angle(180,0);
+        
     }
     
     return 0;
