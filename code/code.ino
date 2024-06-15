@@ -28,9 +28,9 @@ typedef struct {
 } FAN;
 
 // Components
-UltrasonicSensor  US_1 = {PD2, PB3, 1};
-UltrasonicSensor  US_2 = {PD3, PB5, 2};
-ServoMotor        SERVO = {PB2};
+UltrasonicSensor  US_FRONT = {PD2, PB3, 1};
+UltrasonicSensor  US_SIDE = {PD3, PB5, 2};
+ServoMotor        SERVO = {PB1};
 FAN               FAN_LIFT = {PD5};
 FAN               FAN_STEER = {PD6};
 
@@ -113,7 +113,7 @@ void SERVO_init_timer1() {
     TCCR1B |= (1 << CS11);
     TCCR1A |= (1 << WGM11) | (1 << WGM10);
     TCCR1B |= (1 << WGM12) | (1 << CS11);
-    TCCR1A |= (1 << COM1B1);
+    TCCR1A |= (1 << COM1A1);
     
     #if F_CPU >= 8000000L
     TCCR1B |= (1 << CS10);
@@ -143,7 +143,7 @@ void SERVO_move_servo(int angle) {
     
     int dutyCycle = (angle * 4) - ANGLE_CORRECTOR;
     
-    OCR1B = dutyCycle;
+    OCR1A = dutyCycle;
 }
 
 void FAN_init() {
@@ -165,15 +165,15 @@ void GENERAL_init_interrupts() {
 
 void GENERAL_init_ports() {
     // Outputs
-    DDRB |= (1 << US_1.TRIGGER_PIN);
-    DDRB |= (1 << US_2.TRIGGER_PIN);
+    DDRB |= (1 << US_FRONT.TRIGGER_PIN);
+    DDRB |= (1 << US_SIDE.TRIGGER_PIN);
     DDRB |= (1 << SERVO.INPUT_PIN);
     DDRD |= (1 << FAN_LIFT.INPUT_PIN);
     DDRD |= (1 << FAN_STEER.INPUT_PIN);
 
     //Inputs
-    DDRD &= ~(1 << US_1.ECHO_PIN);
-    DDRD &= ~(1 << US_2.ECHO_PIN);
+    DDRD &= ~(1 << US_FRONT.ECHO_PIN);
+    DDRD &= ~(1 << US_SIDE.ECHO_PIN);
 }
 
 int main(void) {
@@ -187,8 +187,8 @@ int main(void) {
     
     while (1) {        
         UART_sendString("\n");
-        SENSORS_measure_distance(US_1, true);
-        SENSORS_measure_distance(US_2, true);
+        SENSORS_measure_distance(US_FRONT, true);
+        SENSORS_measure_distance(US_SIDE, true);
 
         _delay_ms(10000);
         FAN_set_spin(FAN_STEER, ON);
