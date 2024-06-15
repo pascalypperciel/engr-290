@@ -8,26 +8,31 @@
 #define ANGLE_CORRECTOR     147
 #define SENSOR_ITERATOR     10
 #define SERVO_PAUSE_TIME    20000
-#define PRINT_OUTPUT        true
 #define DISTANCE_HORIZONTAL 20.00
 #define DISTANCE_VERTICAL   40.00
-#define INITIAL_PAUSE_MS    4000
+#define INITIAL_PAUSE_MS    0
 #define SIDEWAYS_DELAY_MS   3000
+#define SERVO_FORWARD       0
+#define SERVO_SIDEWAYS      120 //90 deg for some reason
+#define SERVO_BACKWARD      180
 
 // Constants
 #define FAN_ON            255
 #define FAN_OFF           0
 #define SENSOR_HORIZONTAL 0
 #define SENSOR_VERTICAL   1
-#define SERVO_FORWARD     0
-#define SERVO_SIDEWAYS    90
-#define SERVO_BACKWARD    180
+
+// Debug
+#define STOP_HOVERCRAFT false
+#define DEBUG_SENSORS   true
+#define DEBUG_SERVO     true
+#define DEBUG_FANS      true
 
 // Structures
 typedef struct {
     uint8_t ECHO_PIN;
     uint8_t TRIGGER_PIN;
-    uint8_t ID;
+    const char* ID;
 } UltrasonicSensor;
 
 typedef struct {
@@ -39,8 +44,8 @@ typedef struct {
 } FAN;
 
 // Components
-UltrasonicSensor  US_FRONT =  {PD2, PB3, 1};
-UltrasonicSensor  US_SIDE =   {PD3, PB5, 2};
+UltrasonicSensor  US_FRONT =  {PD2, PB3, "Front"};
+UltrasonicSensor  US_SIDE =   {PD3, PB5, "Side"};
 ServoMotor        SERVO =     {PB1};
 FAN               FAN_LIFT =  {PD5};
 FAN               FAN_STEER = {PD6};
@@ -54,14 +59,14 @@ void UART_init() {
     UCSR0C = (1 << USBS0) | (3 << UCSZ00);
 }
 
-void UART_sendChar(unsigned char data) {
+void UART_send_char(unsigned char data) {
     while (!(UCSR0A & (1 << UDRE0)));
     UDR0 = data;
 }
 
-void UART_sendString(const char *str) {
+void UART_send_string(const char *str) {
     while (*str) {
-        UART_sendChar(*str++);
+        UART_send_char(*str++);
     }
 }
 
@@ -116,15 +121,16 @@ void SENSORS_display_distances(float distance, int id) {
     char distance_buffer[16];
     
     dtostrf(distance, 6, 2, distance_buffer);
-    snprintf(buffer, sizeof(buffer), "Distance %d = %s cm\r\t", id, distance_buffer);
+    snprintf(buffer, sizeof(buffer), "%s = %s\r\t", id, distance_buffer);
     
-    UART_sendString(buffer);
+    UART_send_string(buffer);
 }
 
 float SENSORS_distances_average(UltrasonicSensor US) {
     float sum = 0;
     for (int i = 0; i < SENSOR_ITERATOR; i++) {
-        float distance = SENSORS_measure_distance(US, PRINT_OUTPUT);
+        _delay_us(10000);
+        float distance = SENSORS_measure_distance(US, false);
         sum += distance;
     }
     return sum / SENSOR_ITERATOR;
@@ -216,9 +222,11 @@ void GENERAL_init_ports() {
 void GENERAL_setup() {
     FAN_set_spin(FAN_LIFT, FAN_OFF);
     FAN_set_spin(FAN_STEER, FAN_OFF);
-    SERVO_change_angle(1, 0);
-    FAN_set_spin(FAN_LIFT, FAN_ON);
-    _delay_ms(INITIAL_PAUSE_MS);
+    if (!STOP_HOVERCRAFT) {
+        SERVO_change_angle(1, 0);
+        FAN_set_spin(FAN_LIFT, FAN_ON);
+        _delay_ms(INITIAL_PAUSE_MS);
+    }
 }
 
 int GENERAL_move_sideways(int current_servo_angle) {
@@ -238,11 +246,32 @@ int main(void) {
     FAN_init();
     GENERAL_setup();
 
+    char buffer[16];
     int current_servo_angle = 0;
     while (1) {
-        if (SENSORS_opening_detected) {
+        UART_send_string("\n");
+        if (!STOP_HOVERCRAFT && SENSORS_opening_detected()) {
             current_servo_angle = GENERAL_move_sideways(current_servo_angle);
         }
+
+        if (DEBUG_SENSORS) {
+            SENSORS_measure_distance(US_FRONT, true);
+            SENSORS_measure_distance(US_SIDE, true);
+        }
+
+        if (DEBUG_SERVO) {
+            snprintf(buffer, sizeof(buffer), "Angle = %d\r\t", OCR1A);
+            UART_send_string(buffer);
+        }
+
+        if (DEBUG_FANS) {
+            snprintf(buffer, sizeof(buffer), "Steer = %d\r\t", OCR0A);
+            UART_send_string(buffer);
+            snprintf(buffer, sizeof(buffer), "Lift = %d\r\t", OCR0B);
+            UART_send_string(buffer);
+        }
+        
+        UART_send_string("\n");
     }
     
     return 0;
