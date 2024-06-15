@@ -5,12 +5,23 @@
 #include <avr/interrupt.h>
 
 // Values to tweak
-#define ANGLE_CORRECTOR 147
-#define SERVO_PAUSE_TIME 20000
+#define ANGLE_CORRECTOR     147
+#define SENSOR_ITERATOR     10
+#define SERVO_PAUSE_TIME    20000
+#define PRINT_OUTPUT        true
+#define DISTANCE_HORIZONTAL 20.00
+#define DISTANCE_VERTICAL   40.00
+#define INITIAL_PAUSE_MS    4000
+#define SIDEWAYS_DELAY_MS   3000
 
 // Constants
-#define ON 255
-#define OFF 0
+#define FAN_ON            255
+#define FAN_OFF           0
+#define SENSOR_HORIZONTAL 0
+#define SENSOR_VERTICAL   1
+#define SERVO_FORWARD     0
+#define SERVO_SIDEWAYS    90
+#define SERVO_BACKWARD    180
 
 // Structures
 typedef struct {
@@ -28,10 +39,10 @@ typedef struct {
 } FAN;
 
 // Components
-UltrasonicSensor  US_FRONT = {PD2, PB3, 1};
-UltrasonicSensor  US_SIDE = {PD3, PB5, 2};
-ServoMotor        SERVO = {PB1};
-FAN               FAN_LIFT = {PD5};
+UltrasonicSensor  US_FRONT =  {PD2, PB3, 1};
+UltrasonicSensor  US_SIDE =   {PD3, PB5, 2};
+ServoMotor        SERVO =     {PB1};
+FAN               FAN_LIFT =  {PD5};
 FAN               FAN_STEER = {PD6};
 
 // Functions
@@ -91,6 +102,8 @@ uint32_t SENSORS_measure_distance(UltrasonicSensor US, bool display_distance) {
     float time_taken = duration * (8.0 / F_CPU);
     float distance = (time_taken * 34300.0);
 
+    if (distance > 400.00) distance = 400.00;
+
     if (display_distance) {
         SENSORS_display_distances(distance, US.ID);
     }
@@ -108,6 +121,27 @@ void SENSORS_display_distances(float distance, int id) {
     UART_sendString(buffer);
 }
 
+float SENSORS_distances_average(UltrasonicSensor US) {
+    float sum = 0;
+    for (int i = 0; i < SENSOR_ITERATOR; i++) {
+        float distance = SENSORS_measure_distance(US, PRINT_OUTPUT);
+        sum += distance;
+    }
+    return sum / SENSOR_ITERATOR;
+}
+
+bool SENSORS_opening_detected() {
+    return SENSORS_distances_average(US_SIDE) > DISTANCE_HORIZONTAL;
+}
+
+int SENSOR_decide_angle() {
+    if (SENSORS_distances_average(US_FRONT) >= DISTANCE_VERTICAL) {
+        return SERVO_FORWARD;
+    } else {
+        return SERVO_BACKWARD;
+    }
+}
+
 void SERVO_init_timer1() {
     TCCR1B = 0;
     TCCR1B |= (1 << CS11);
@@ -121,20 +155,23 @@ void SERVO_init_timer1() {
 }
 
 void SERVO_change_angle(int initial, int final) {
-    int stepper = 1;
+    if (initial == final) return;
+    FAN_set_spin(FAN_STEER, FAN_OFF);
+    _delay_ms(1000);
+    
     if (initial > final) {
         for (int pos = initial; pos >= final; pos--) {
-          SERVO_move_servo(pos);
-          _delay_us(SERVO_PAUSE_TIME);
+            SERVO_move_servo(pos);
+            _delay_us(SERVO_PAUSE_TIME);
         }
     } else if (initial < final) {
         for (int pos = initial; pos <= final; pos++) {
-          SERVO_move_servo(pos);
-          _delay_us(SERVO_PAUSE_TIME);
+            SERVO_move_servo(pos);
+            _delay_us(SERVO_PAUSE_TIME);
         }
-    } else {
-      return;
     }
+    
+    FAN_set_spin(FAN_STEER, FAN_ON);
 }
 
 void SERVO_move_servo(int angle) {
@@ -152,11 +189,11 @@ void FAN_init() {
 }
 
 void FAN_set_spin(FAN fan, int value) {
-  if (fan.INPUT_PIN == PD5) {
-    OCR0B = value;
-  } else if (fan.INPUT_PIN == PD6) {
-    OCR0A = value;
-  }
+    if (fan.INPUT_PIN == PD5) {
+        OCR0B = value;
+    } else if (fan.INPUT_PIN == PD6) {
+        OCR0A = value;
+    }
 }
 
 void GENERAL_init_interrupts() {
@@ -176,6 +213,22 @@ void GENERAL_init_ports() {
     DDRD &= ~(1 << US_SIDE.ECHO_PIN);
 }
 
+void GENERAL_setup() {
+    FAN_set_spin(FAN_LIFT, FAN_OFF);
+    FAN_set_spin(FAN_STEER, FAN_OFF);
+    SERVO_change_angle(1, 0);
+    FAN_set_spin(FAN_LIFT, FAN_ON);
+    _delay_ms(INITIAL_PAUSE_MS);
+}
+
+int GENERAL_move_sideways(int current_servo_angle) {
+    SERVO_change_angle(current_servo_angle, SERVO_SIDEWAYS);
+    _delay_ms(SIDEWAYS_DELAY_MS);
+    int direction = SENSOR_decide_angle();
+    SERVO_change_angle(SERVO_SIDEWAYS, direction);
+    return direction;
+}
+
 int main(void) {
     // Initialize ports, UART, and servo
     GENERAL_init_interrupts();
@@ -183,18 +236,13 @@ int main(void) {
     UART_init();
     SERVO_init_timer1();
     FAN_init();
-    FAN_set_spin(FAN_LIFT, ON);
-    
-    while (1) {        
-        UART_sendString("\n");
-        SENSORS_measure_distance(US_FRONT, true);
-        SENSORS_measure_distance(US_SIDE, true);
+    GENERAL_setup();
 
-        _delay_ms(10000);
-        FAN_set_spin(FAN_STEER, ON);
-        _delay_ms(10000);
-        FAN_set_spin(FAN_STEER, OFF);
-        
+    int current_servo_angle = 0;
+    while (1) {
+        if (SENSORS_opening_detected) {
+            current_servo_angle = GENERAL_move_sideways(current_servo_angle);
+        }
     }
     
     return 0;
