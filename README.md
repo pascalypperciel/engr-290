@@ -13,5 +13,6 @@ TO-DO list:
 - [x] Get servo motor to move to a selected angle
 - [x] Have lift fan always running
 - [x] Direction fan run dynamically
-- [ ] Make algorithm to time everything
-- [ ] Have the thing calibrated with IMU
+- [x] Make algorithm to time everything
+- [ ] Implement IMU
+- [ ] Make IMU stabilize the craft
