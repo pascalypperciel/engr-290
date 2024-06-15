@@ -10,20 +10,20 @@
 #define SERVO_PAUSE_TIME    20000
 #define DISTANCE_HORIZONTAL 20.00
 #define DISTANCE_VERTICAL   40.00
-#define INITIAL_PAUSE_MS    4000
+#define INITIAL_PAUSE_MS    0
 #define SIDEWAYS_DELAY_MS   3000
+#define SERVO_FORWARD       0
+#define SERVO_SIDEWAYS      120 //90 deg for some reason
+#define SERVO_BACKWARD      180
 
 // Constants
 #define FAN_ON            255
 #define FAN_OFF           0
 #define SENSOR_HORIZONTAL 0
 #define SENSOR_VERTICAL   1
-#define SERVO_FORWARD     0
-#define SERVO_SIDEWAYS    90
-#define SERVO_BACKWARD    180
 
 // Debug
-#define STOP_HOVERCRAFT true
+#define STOP_HOVERCRAFT false
 #define DEBUG_SENSORS   true
 #define DEBUG_SERVO     true
 #define DEBUG_FANS      true
@@ -129,6 +129,7 @@ void SENSORS_display_distances(float distance, int id) {
 float SENSORS_distances_average(UltrasonicSensor US) {
     float sum = 0;
     for (int i = 0; i < SENSOR_ITERATOR; i++) {
+        _delay_us(10000);
         float distance = SENSORS_measure_distance(US, false);
         sum += distance;
     }
@@ -248,6 +249,7 @@ int main(void) {
     char buffer[16];
     int current_servo_angle = 0;
     while (1) {
+        UART_send_string("\n");
         if (!STOP_HOVERCRAFT && SENSORS_opening_detected()) {
             current_servo_angle = GENERAL_move_sideways(current_servo_angle);
         }
