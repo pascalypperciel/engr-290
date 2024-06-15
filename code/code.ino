@@ -5,28 +5,23 @@
 #include <avr/interrupt.h>
 
 // Values to tweak
-#define ANGLE_CORRECTOR     147
 #define SENSOR_ITERATOR     10
-#define SERVO_PAUSE_TIME    20000
-#define DISTANCE_HORIZONTAL 20.00
+#define DISTANCE_HORIZONTAL 40.00
 #define DISTANCE_VERTICAL   40.00
-#define INITIAL_PAUSE_MS    0
 #define SIDEWAYS_DELAY_MS   3000
-#define SERVO_FORWARD       0
-#define SERVO_SIDEWAYS      120 //90 deg for some reason
-#define SERVO_BACKWARD      180
 
 // Constants
-#define FAN_ON            255
-#define FAN_OFF           0
-#define SENSOR_HORIZONTAL 0
-#define SENSOR_VERTICAL   1
+#define FAN_ON              255
+#define FAN_OFF             0
+#define SERVO_FORWARD       0
+#define SERVO_SIDEWAYS      90
+#define SERVO_BACKWARD      180
 
 // Debug
-#define STOP_HOVERCRAFT true
-#define DEBUG_SENSORS   false
-#define DEBUG_SERVO     false
-#define DEBUG_FANS      false
+#define STOP_HOVERCRAFT     false
+#define DEBUG_SENSORS       true
+#define DEBUG_SERVO         false
+#define DEBUG_FANS          false
 
 // Structures
 typedef struct {
@@ -149,48 +144,26 @@ int SENSOR_decide_angle() {
 }
 
 void SERVO_init_timer1() {
-    TCCR1B = 0;
-    TCCR1B |= (1 << CS11);
-    TCCR1A |= (1 << WGM11) | (1 << WGM10);
-    TCCR1B |= (1 << WGM12) | (1 << CS11);
-    TCCR1A |= (1 << COM1A1);
-    
-    #if F_CPU >= 8000000L
-    TCCR1B |= (1 << CS10);
-    #endif
+    TCCR1A = (1 << WGM11) | (1 << COM1A1);
+    TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS11);
+
+    ICR1 = 39999;
 }
 
-void SERVO_change_angle(int initial, int final) {
-    if (initial == final) return;
+void SERVO_change_angle(float angle) {
     if (!STOP_HOVERCRAFT) {
         FAN_set_spin(FAN_STEER, FAN_OFF);
         _delay_ms(1000);      
     }
     
-    if (initial > final) {
-        for (int pos = initial; pos > final; pos--) {
-            SERVO_move_servo(pos);
-            _delay_us(SERVO_PAUSE_TIME);
-        }
-    } else if (initial < final) {
-        for (int pos = initial; pos < final; pos++) {
-            SERVO_move_servo(pos);
-            _delay_us(SERVO_PAUSE_TIME);
-        }
-    }
+    if (angle < 0) angle = 0;
+    if (angle > 180) angle = 180;
 
+    OCR1A = map(angle, 0, 180, 1000, 4500);
+    
     if (!STOP_HOVERCRAFT) {
         FAN_set_spin(FAN_STEER, FAN_ON);
     }
-}
-
-void SERVO_move_servo(int angle) {
-    if (angle < 0) angle = 0;
-    if (angle > 180) angle = 180;
-    
-    int dutyCycle = (angle * 4) - ANGLE_CORRECTOR;
-    
-    OCR1A = dutyCycle;
 }
 
 void FAN_init() {
@@ -227,18 +200,15 @@ void GENERAL_setup() {
     FAN_set_spin(FAN_LIFT, FAN_OFF);
     FAN_set_spin(FAN_STEER, FAN_OFF);
     if (!STOP_HOVERCRAFT) {
-        SERVO_change_angle(1, 0);
+        SERVO_change_angle(SERVO_FORWARD);
         FAN_set_spin(FAN_LIFT, FAN_ON);
-        _delay_ms(INITIAL_PAUSE_MS);
     }
 }
 
-int GENERAL_move_sideways(int current_servo_angle) {
-    SERVO_change_angle(current_servo_angle, SERVO_SIDEWAYS);
+void GENERAL_move_sideways() {
+    SERVO_change_angle(SERVO_SIDEWAYS);
     _delay_ms(SIDEWAYS_DELAY_MS);
-    int direction = SENSOR_decide_angle();
-    SERVO_change_angle(SERVO_SIDEWAYS, direction);
-    return direction;
+    SERVO_change_angle(SENSOR_decide_angle());
 }
 
 int main(void) {
@@ -251,11 +221,10 @@ int main(void) {
     GENERAL_setup();
 
     char buffer[16];
-    int current_servo_angle = 0;
     while (1) {
         UART_send_string("\n");
         if (!STOP_HOVERCRAFT && SENSORS_opening_detected()) {
-            current_servo_angle = GENERAL_move_sideways(current_servo_angle);
+            GENERAL_move_sideways();
         }
 
         if (DEBUG_SENSORS) {
