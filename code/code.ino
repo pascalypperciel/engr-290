@@ -23,10 +23,10 @@
 #define SENSOR_VERTICAL   1
 
 // Debug
-#define STOP_HOVERCRAFT false
-#define DEBUG_SENSORS   true
-#define DEBUG_SERVO     true
-#define DEBUG_FANS      true
+#define STOP_HOVERCRAFT true
+#define DEBUG_SENSORS   false
+#define DEBUG_SERVO     false
+#define DEBUG_FANS      false
 
 // Structures
 typedef struct {
@@ -162,22 +162,26 @@ void SERVO_init_timer1() {
 
 void SERVO_change_angle(int initial, int final) {
     if (initial == final) return;
-    FAN_set_spin(FAN_STEER, FAN_OFF);
-    _delay_ms(1000);
+    if (!STOP_HOVERCRAFT) {
+        FAN_set_spin(FAN_STEER, FAN_OFF);
+        _delay_ms(1000);      
+    }
     
     if (initial > final) {
-        for (int pos = initial; pos >= final; pos--) {
+        for (int pos = initial; pos > final; pos--) {
             SERVO_move_servo(pos);
             _delay_us(SERVO_PAUSE_TIME);
         }
     } else if (initial < final) {
-        for (int pos = initial; pos <= final; pos++) {
+        for (int pos = initial; pos < final; pos++) {
             SERVO_move_servo(pos);
             _delay_us(SERVO_PAUSE_TIME);
         }
     }
-    
-    FAN_set_spin(FAN_STEER, FAN_ON);
+
+    if (!STOP_HOVERCRAFT) {
+        FAN_set_spin(FAN_STEER, FAN_ON);
+    }
 }
 
 void SERVO_move_servo(int angle) {
@@ -270,8 +274,6 @@ int main(void) {
             snprintf(buffer, sizeof(buffer), "Lift = %d\r\t", OCR0B);
             UART_send_string(buffer);
         }
-        
-        UART_send_string("\n");
     }
     
     return 0;
