@@ -7,19 +7,23 @@
 // Values to tweak
 #define SENSOR_ITERATOR     10
 #define DISTANCE_HORIZONTAL 40.00
-#define DISTANCE_VERTICAL   40.00
-#define SIDEWAYS_DELAY_MS   3000
+#define DISTANCE_VERTICAL   100.00
+#define SIDEWAYS_DELAY_MS   2000
+#define DELAY_BEFORE_TURN   3000
 
 // Constants
-#define FAN_ON              255
+#define FAN_HORI_SPEED      255
+#define FAN_UPHILL_SPEED    170
+#define FAN_DOWNHILL_SPEED  170
+#define FAN_MAX             255
 #define FAN_OFF             0
-#define SERVO_FORWARD       0
+#define SERVO_UPHILL        0
 #define SERVO_SIDEWAYS      90
-#define SERVO_BACKWARD      180
+#define SERVO_DOWNHILL      180
 
 // Debug
-#define STOP_HOVERCRAFT     false
-#define DEBUG_SENSORS       true
+#define RUN_HOVERCRAFT      true
+#define DEBUG_SENSORS       false
 #define DEBUG_SERVO         false
 #define DEBUG_FANS          false
 
@@ -137,9 +141,9 @@ bool SENSORS_opening_detected() {
 
 int SENSOR_decide_angle() {
     if (SENSORS_distances_average(US_FRONT) >= DISTANCE_VERTICAL) {
-        return SERVO_FORWARD;
+        return SERVO_UPHILL;
     } else {
-        return SERVO_BACKWARD;
+        return SERVO_DOWNHILL;
     }
 }
 
@@ -151,9 +155,9 @@ void SERVO_init_timer1() {
 }
 
 void SERVO_change_angle(float angle) {
-    if (!STOP_HOVERCRAFT) {
+    if (RUN_HOVERCRAFT) {
         FAN_set_spin(FAN_STEER, FAN_OFF);
-        _delay_ms(1000);      
+        _delay_ms(DELAY_BEFORE_TURN);      
     }
     
     if (angle < 0) angle = 0;
@@ -161,8 +165,14 @@ void SERVO_change_angle(float angle) {
 
     OCR1A = map(angle, 0, 180, 1000, 4500);
     
-    if (!STOP_HOVERCRAFT) {
-        FAN_set_spin(FAN_STEER, FAN_ON);
+    if (RUN_HOVERCRAFT) {
+        if (angle == SERVO_SIDEWAYS) {
+            FAN_set_spin(FAN_STEER, FAN_HORI_SPEED);
+        } else if (angle == SERVO_UPHILL) {
+            FAN_set_spin(FAN_STEER, FAN_UPHILL_SPEED);
+        } else {
+            FAN_set_spin(FAN_STEER, FAN_DOWNHILL_SPEED);
+        }
     }
 }
 
@@ -199,9 +209,9 @@ void GENERAL_init_ports() {
 void GENERAL_setup() {
     FAN_set_spin(FAN_LIFT, FAN_OFF);
     FAN_set_spin(FAN_STEER, FAN_OFF);
-    if (!STOP_HOVERCRAFT) {
-        SERVO_change_angle(SERVO_FORWARD);
-        FAN_set_spin(FAN_LIFT, FAN_ON);
+    if (RUN_HOVERCRAFT) {
+        SERVO_change_angle(SERVO_UPHILL);
+        FAN_set_spin(FAN_STEER, FAN_HORI_SPEED);
     }
 }
 
@@ -223,7 +233,7 @@ int main(void) {
     char buffer[16];
     while (1) {
         UART_send_string("\n");
-        if (!STOP_HOVERCRAFT && SENSORS_opening_detected()) {
+        if (RUN_HOVERCRAFT && SENSORS_opening_detected()) {
             GENERAL_move_sideways();
         }
 
@@ -243,6 +253,7 @@ int main(void) {
             snprintf(buffer, sizeof(buffer), "Lift = %d\r\t", OCR0B);
             UART_send_string(buffer);
         }
+        
     }
     
     return 0;
