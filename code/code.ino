@@ -7,14 +7,14 @@
 // Values to tweak
 #define SENSOR_ITERATOR     10
 #define DISTANCE_HORIZONTAL 40.00
-#define DISTANCE_VERTICAL   100.00
+#define DISTANCE_VERTICAL   80.00
 #define SIDEWAYS_DELAY_MS   2000
 #define DELAY_BEFORE_TURN   3000
 
 // Constants
 #define FAN_HORI_SPEED      255
 #define FAN_UPHILL_SPEED    170
-#define FAN_DOWNHILL_SPEED  170
+#define FAN_DOWNHILL_SPEED  200
 #define FAN_MAX             255
 #define FAN_OFF             0
 #define SERVO_UPHILL        0
@@ -22,10 +22,12 @@
 #define SERVO_DOWNHILL      180
 
 // Debug
-#define RUN_HOVERCRAFT      true
-#define DEBUG_SENSORS       false
+#define RUN_HOVERCRAFT      false
+#define DEBUG_SENSORS       true
 #define DEBUG_SERVO         false
 #define DEBUG_FANS          false
+#define DEBUG_LIFT          false
+#define DEBUG_SERVO_SPIN    true
 
 // Structures
 typedef struct {
@@ -211,7 +213,7 @@ void GENERAL_setup() {
     FAN_set_spin(FAN_STEER, FAN_OFF);
     if (RUN_HOVERCRAFT) {
         SERVO_change_angle(SERVO_UPHILL);
-        FAN_set_spin(FAN_STEER, FAN_HORI_SPEED);
+        FAN_set_spin(FAN_LIFT, FAN_MAX);
     }
 }
 
@@ -252,6 +254,19 @@ int main(void) {
             UART_send_string(buffer);
             snprintf(buffer, sizeof(buffer), "Lift = %d\r\t", OCR0B);
             UART_send_string(buffer);
+        }
+
+        if (DEBUG_LIFT) {
+            FAN_set_spin(FAN_LIFT, FAN_MAX);
+        }
+
+        if (DEBUG_SERVO_SPIN) {
+            SERVO_change_angle(SERVO_UPHILL);
+            _delay_ms(2000);
+            SERVO_change_angle(SERVO_SIDEWAYS);
+            _delay_ms(2000);
+            SERVO_change_angle(SERVO_DOWNHILL);
+            _delay_ms(2000);
         }
         
     }
