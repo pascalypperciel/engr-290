@@ -365,4 +365,3 @@ const char* MPU6050::error_str(int error ) {
         default: return "<unknown>";        
     }
 }
-

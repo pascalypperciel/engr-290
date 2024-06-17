@@ -181,7 +181,7 @@ void SERVO_change_angle(float angle) {
     if (angle < 0) angle = 0;
     if (angle > 180) angle = 180;
 
-    //OCR1A = map(angle, 0, 180, 800, 4300);
+    OCR1A = map(angle, 0, 180, 800, 4300);
     
     if (RUN_HOVERCRAFT) {
         FAN_set_spin(FAN_STEER, FAN_MAX);
@@ -214,6 +214,15 @@ float mpu6050_yaw() {
         data = MPU.get();
     }
     return data.dir.yaw;
+}
+
+void MPU_display_yaw() {
+    char buffer[32];
+    float yaw = mpu6050_yaw();
+    dtostrf(yaw, 6, 2, buffer);
+    UART_send_string("Yaw: ");
+    UART_send_string(buffer);
+    UART_send_string("\r");
 }
 
 float PID_adjust(float error) {
@@ -283,9 +292,6 @@ int main(void) {
     
     char buffer[16];
     while (1) {
-        float current_yaw = mpu6050_yaw();
-        snprintf(buffer, sizeof(buffer), "Yaw: %.2f\r", current_yaw);
-        UART_send_string(buffer);
         UART_send_string("\n");
 
         if (RUN_HOVERCRAFT) {
@@ -298,6 +304,8 @@ int main(void) {
                 GENERAL_turn(opening_angle);
             }
         }
+        
+        MPU_display_yaw();
 
         if (DEBUG_SENSORS) {
             SENSORS_measure_distance(US_RIGHT, true);
