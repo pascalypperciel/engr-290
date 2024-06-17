@@ -40,7 +40,7 @@
 #define DEBUG_FANS          false
 #define DEBUG_LIFT          false
 #define DEBUG_SERVO_SPIN    false
-#define DEBUG_SKIRT         true
+#define DEBUG_SKIRT         false
 
 // Structures
 typedef struct {
@@ -283,17 +283,20 @@ int main(void) {
     
     char buffer[16];
     while (1) {
+        float current_yaw = mpu6050_yaw();
+        snprintf(buffer, sizeof(buffer), "Yaw: %.2f\r", current_yaw);
+        UART_send_string(buffer);
         UART_send_string("\n");
-        int opening_angle = SENSORS_opening_detected();
-        if (RUN_HOVERCRAFT && opening_angle != 0) {
-            GENERAL_turn(opening_angle);
-        }
 
         if (RUN_HOVERCRAFT) {
             float imu_error = target_yaw - mpu6050_yaw();
             float angle_correct = target_yaw - PID_adjust(imu_error);
             angle_correct = constrain(angle_correct, 0, 180);
             SERVO_change_angle(angle_correct);
+            int opening_angle = SENSORS_opening_detected();
+            if (opening_angle != 0) {
+                GENERAL_turn(opening_angle);
+            }
         }
 
         if (DEBUG_SENSORS) {
@@ -331,7 +334,6 @@ int main(void) {
             FAN_set_spin(FAN_LIFT, FAN_MAX);
             FAN_set_spin(FAN_STEER, FAN_MAX);
         }
-        
     }
     
     return 0;
