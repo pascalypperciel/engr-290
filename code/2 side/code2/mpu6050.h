@@ -1,4 +1,4 @@
-// mpu6050.h - Driver for the MPU6050 accelerometer and gyroscope.
+/*// mpu6050.h - Driver for the MPU6050 accelerometer and gyroscope.
 // https://github.com/maarten-pennings/MPU6050
 #ifndef _MPU6050_H_
 #define _MPU6050_H_
@@ -153,4 +153,4 @@ class MPU6050 {
         int write8  (uint8_t addr, uint8_t   value);
 };
 
-#endif // _MPU6050_H_
+#endif // _MPU6050_H_*/

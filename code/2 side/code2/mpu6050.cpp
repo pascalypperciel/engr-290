@@ -1,4 +1,5 @@
-// mpu6050.cpp - Driver for the MPU6050 accelerometer and gyroscope.
+
+/*// mpu6050.cpp - Driver for the MPU6050 accelerometer and gyroscope.
 // https://github.com/maarten-pennings/MPU6050
 // Created by Maarten Pennings, based on
 //   https://github.com/Th-Havy/Simple-MPU6050-Arduino and 
@@ -364,4 +365,4 @@ const char* MPU6050::error_str(int error ) {
         case 13: return "calibrate(): too few samples";
         default: return "<unknown>";        
     }
-}
+}*/
