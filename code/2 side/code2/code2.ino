@@ -248,7 +248,7 @@ void MPU6050::setFilterAccCoef(float acc_coeff) {
 
 
 // Values to tweak
-#define SENSOR_ITERATOR     30
+#define SENSOR_ITERATOR     10
 #define DISTANCE_HORIZONTAL 70.00
 #define DISTANCE_VERTICAL   80.00
 #define SIDEWAYS_DELAY_MS   2000
@@ -266,8 +266,8 @@ void MPU6050::setFilterAccCoef(float acc_coeff) {
 #define ANGLE_SERVO_CENTER  90
 #define ANGLE_SERVO_LEFT    0
 
-#define ANGLE_YAW_AWAY      0
-#define ANGLE_YAW_TOWARDS   180
+#define ANGLE_YAW_AWAY      90
+#define ANGLE_YAW_TOWARDS   270
 
 #define PID_PROP 0.5
 #define PID_INTE 0.1
@@ -399,9 +399,9 @@ void SENSORS_display_distances(float distance, int id) {
 }
 
 int SENSORS_opening_detected() {
-    if (SENSORS_measure_distance(US_RIGHT, false) > DISTANCE_HORIZONTAL) {
+    if (SENSORS_distances_average(US_RIGHT) > DISTANCE_HORIZONTAL) {
         return ANGLE_SERVO_RIGHT;
-    } else if (SENSORS_measure_distance(US_LEFT, false) > DISTANCE_HORIZONTAL) {
+    } else if (SENSORS_distances_average(US_LEFT) > DISTANCE_HORIZONTAL) {
         return ANGLE_SERVO_LEFT;
     }
     return 0;
@@ -452,15 +452,24 @@ void MPU_change_target_yaw() {
 }
 
 bool MPU_is_turn_over() {
-    float current_yaw = MPU_get_yawss();
-    return current_yaw >= target_yaw - ERROR_TURN_YAW && current_yaw <= target_yaw + ERROR_TURN_YAW;
+      float current_yaw = MPU_get_yawss();
+      return current_yaw >= target_yaw - ERROR_TURN_YAW && current_yaw <= target_yaw + ERROR_TURN_YAW;
 }
 
 float MPU_get_yaw() {
       float yaw = mpu.getAngleZ();
-      if (yaw < 0) {
-          
-      }
+      yaw += 90;
+      if (yaw < 0) yaw = 0;
+      if (yaw > 180) yaw = 180;
+
+      return yaw;
+}
+
+float MPU_get_yaw_constraint() {
+      float yaw = mpu.getAngleZ();
+      if (yaw < 0) yaw = 0;
+      if (yaw > 180) yaw = 180;
+
       return yaw;
 }
 
@@ -473,8 +482,17 @@ float MPU_get_yaws() {
       return yaw;
 }
 
+float MPU_get_yawst() {
+      float yaw = MPU_get_yaw_constraint();
+      char buffer[16];
+      dtostrf(yaw, 6, 2, buffer);
+      UART_send_string("\nYaw : ");
+      UART_send_string(buffer);
+      return yaw;
+}
+
 float MPU_get_yawss() {
-    float yaw = mpu.getAngleZ();
+    float yaw = MPU_get_yaw();
     char buffer[32]; // Increase buffer size to accommodate both values
     char target_yaw_buffer[16]; // Buffer for target_yaw
 
@@ -548,10 +566,8 @@ void loop() {
     char buffer[50];
     if (RUN_HOVERCRAFT) {
         mpu.update();
-        float yaw = MPU_get_yaws();
-        float imu_error = target_yaw - yaw;
-        float angle_correct = target_yaw - PID_adjust(imu_error);
-        SERVO_change_angle(angle_correct);
+        float imu_error = target_yaw - MPU_get_yawst();
+        SERVO_change_angle(imu_error);
         int opening_angle = SENSORS_opening_detected();
         if (opening_angle != 0) {
             UART_send_string("TURNINGGGGG");
