@@ -8,10 +8,7 @@
 
 // Values to tweak
 #define SENSOR_ITERATOR     10
-#define DISTANCE_HORIZONTAL 70.00
-#define DISTANCE_VERTICAL   80.00
-#define SIDEWAYS_DELAY_MS   2000
-#define DELAY_BEFORE_TURN   2000
+#define DISTANCE_HORIZONTAL 30.00
 #define ERROR_TURN_YAW      15
 
 // Constants
@@ -21,6 +18,7 @@
 #define FAN_MAX             255
 #define FAN_OFF             0
 
+//LEFT IS 0 ALWAYS
 #define ANGLE_SERVO_RIGHT   180
 #define ANGLE_SERVO_CENTER  90
 #define ANGLE_SERVO_LEFT    0
@@ -91,6 +89,11 @@ void UART_send_string(const char *str) {
 }
 
 uint32_t SENSORS_measure_distance(UltrasonicSensor US, bool display_distance) {
+    // Ensure that only one sensor is triggered at a time
+    static bool sensor_active = false;
+    while (sensor_active);  // Wait if another sensor is active
+    sensor_active = true;
+    
     // Send a 10us pulse to trigger pin
     PORTB &= ~(1 << US.TRIGGER_PIN);
     _delay_us(2);
@@ -133,7 +136,8 @@ uint32_t SENSORS_measure_distance(UltrasonicSensor US, bool display_distance) {
     if (display_distance) {
         //SENSORS_display_distances(distance, US.ID);
     }
-
+    sensor_active = false;
+    _delay_ms(5);
     return distance;
 }
 
@@ -214,26 +218,21 @@ bool MPU_is_turn_over() {
       return current_yaw >= target_yaw - ERROR_TURN_YAW && current_yaw <= target_yaw + ERROR_TURN_YAW;
 }
 
-float MPU_get_yaw() {
-  MPU6050_t data = mpu.get();
-  return data.dir.yaw;
-}
-
 float MPU_get_yaws() {
-      float yaw = MPU_get_yaw();
+      MPU6050_t data = mpu.get();
       char buffer[16];
-      dtostrf(yaw, 6, 2, buffer);
+      dtostrf(data.dir.yaw, 6, 2, buffer);
       UART_send_string("\nYaw : ");
       UART_send_string(buffer);
-      return yaw;
+      return data.dir.yaw;
 }
 
 float MPU_get_yawss() {
-    float yaw = MPU_get_yaw();
+    MPU6050_t data = mpu.get();
     char buffer[32]; // Increase buffer size to accommodate both values
     char target_yaw_buffer[16]; // Buffer for target_yaw
 
-    dtostrf(yaw, 6, 2, buffer); // Convert yaw to string
+    dtostrf(data.dir.yaw, 6, 2, buffer); // Convert yaw to string
     dtostrf(target_yaw, 6, 2, target_yaw_buffer); // Convert target_yaw to string
 
     strcat(buffer, " target_yaw: "); // Append the label for target_yaw
@@ -242,7 +241,7 @@ float MPU_get_yawss() {
     UART_send_string("\nYee: ");
     UART_send_string(buffer);
 
-    return yaw;
+    return data.dir.yaw;
 }
 
 void GENERAL_init_interrupts() {
@@ -270,19 +269,11 @@ void GENERAL_setup() {
         FAN_set_spin(FAN_LIFT, FAN_MAX);
         FAN_set_spin(FAN_STEER, FAN_MAX);
     }
-  int error= mpu.begin(); 
-}
-
-void GENERAL_turn(float opening_angle) {
-    MPU_change_target_yaw();
-    SERVO_change_angle(opening_angle);
-    while (!MPU_is_turn_over()) {
-        delay(5);
-    }
+  int error= mpu.begin();
+  if(error) { UART_send_string("MPU initialization failed :("); }
 }
 
 void forward_logic() {
-  //this code needs to take 90 (away) or 270 (towards) yaw and orient towards that, ideally the servo stays near 90. This will run until opening is detected.
   float imu_error;
   if (target_yaw == ANGLE_YAW_AWAY) {
     imu_error = 180 - (target_yaw - MPU_get_yaws());
@@ -293,6 +284,14 @@ void forward_logic() {
   if(imu_error > 180) { imu_error = 180; }
   if(imu_error < 0) { imu_error = 0; }
   SERVO_change_angle(imu_error);
+}
+
+void GENERAL_turn(float opening_angle) {
+    MPU_change_target_yaw();
+    SERVO_change_angle(opening_angle);
+    while (!MPU_is_turn_over()) {
+        delay(5);
+    }
 }
 
 void setup() {
@@ -317,11 +316,14 @@ void loop() {
     char buffer[50];
     if (RUN_HOVERCRAFT) {
         forward_logic();
+
         int opening_angle = SENSORS_opening_detected();
         if(opening_angle != 0) {
         UART_send_string("TURNINGGGGG");
         GENERAL_turn(opening_angle);
         }
+
+
     }
     
     if (DEBUG_SENSORS) {
