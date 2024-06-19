@@ -9,20 +9,20 @@
 
 // Values to tweak
 #define RANGE_WALL          40
-#define ERROR_TURN_YAW      0
-#define WAIT_AFTER_TURN     40
-#define ITERATOR_AVERAGE    1
-#define VALUES_IN_A_ROW     5
+#define ERROR_TURN_YAW      70
+#define WAIT_AFTER_TURN     50
+#define VALUES_IN_A_ROW     2
 
 
 // Constants
 #define FAN_SPEED_MAX       255
 #define FAN_SPEED_LESS      230
+#define FAN_SPEED_LESS_LESS 200
 #define FAN_SPEED_OFF       0
 
-#define ANGLE_SERVO_RIGHT   180
+#define ANGLE_SERVO_RIGHT   170
 #define ANGLE_SERVO_CENTER  90
-#define ANGLE_SERVO_LEFT    0
+#define ANGLE_SERVO_LEFT    10
 
 #define ANGLE_YAW_AWAY      0
 #define ANGLE_YAW_TOWARDS   180
@@ -95,14 +95,15 @@ int SENSORS_opening_detected() {
             last_was_big_right = true;
             return -1;
         }
-    } else if (left >= RANGE_WALL) {
+    }
+    if (left >= RANGE_WALL) {
         opening_in_a_row_left++;
         if (opening_in_a_row_left == VALUES_IN_A_ROW && last_was_big_left) {
             opening_in_a_row_left = 0;
+            last_was_big_right = false;
             return ANGLE_SERVO_LEFT;
         } else {
             last_was_big_left = true;
-            last_was_big_left = false;
             return -1;
         }
     }
@@ -212,27 +213,36 @@ void GENERAL_forward_logic() {
     //this code needs to take 90 (away) or 270 (towards) yaw and orient towards that, ideally the servo stays near 90. This will run until opening is detected.
     float imu_error;
     float yaw = MPU_get_yaw();
+    float PID_constant = 0;
     if (target_yaw == ANGLE_YAW_AWAY) {
       imu_error = 90 - (target_yaw - yaw);
+      PID_constant = target_yaw - yaw;
+        if(abs(PID_constant) > 5) {                  
+          imu_error += (-PID_constant*1.2);           
+        }
     }
     else if (target_yaw == ANGLE_YAW_TOWARDS) {
-      imu_error = 90 - (target_yaw - yaw);
+      imu_error = (target_yaw - yaw) - 270;      //(180 + 171) - 270 = 81
+      PID_constant = target_yaw + yaw;          //180 -171 = 9 
+          if(abs(PID_constant) > 5) {                  
+            imu_error += (PID_constant * 1.2);
+          }
     }
     
-    float PID_constant = target_yaw - yaw;
-    if(abs(PID_constant) > 5) {
-      imu_error += (-PID_constant);
-    }
+    
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "\tservo = %d\r\t", (int)imu_error);
+    UART_send_string(buffer);
     
     SERVO_change_angle(imu_error);
 }
 
 void GENERAL_turn(float opening_angle) {
+    FAN_set_spin(FAN_STEER, FAN_SPEED_LESS_LESS);
     MPU_change_target_yaw();
     SERVO_change_angle(opening_angle);
-    while (!MPU_is_turn_over()) {
-        delay(5);
-    }
+    while (!MPU_is_turn_over()) { }
+    FAN_set_spin(FAN_STEER, FAN_SPEED_LESS);
 }
 
 void setup() {
