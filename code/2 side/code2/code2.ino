@@ -1,5 +1,3 @@
-#include "HCSR04.h"
-
 #include "mpu6050.h"
 #include <avr/io.h>
 #include <util/delay.h>
@@ -28,8 +26,15 @@
 #define ANGLE_YAW_AWAY      0
 #define ANGLE_YAW_TOWARDS   180
 
+#define F_CPU 16000000UL
 
 // Structures
+typedef struct {
+    uint8_t ECHO_PIN;
+    uint8_t TRIGGER_PIN;
+    const char* ID;
+} UltrasonicSensor;
+
 typedef struct {
     uint8_t INPUT_PIN;
 } ServoMotor;
@@ -39,12 +44,12 @@ typedef struct {
 } FAN;
 
 // Components
+UltrasonicSensor  US_RIGHT =  {PD2, PB3, "Front"};
+UltrasonicSensor  US_LEFT =   {PD3, PB5, "Side"};
 ServoMotor        SERVO =     {PB1};
 FAN               FAN_LIFT =  {PD5};
 FAN               FAN_STEER = {PD6};
 MPU6050           ICU;
-HCSR04            US_LEFT(11, 2);
-HCSR04            US_RIGHT(13, 3);
 
 // Global variable
 int target_yaw = ANGLE_YAW_AWAY;
@@ -76,14 +81,53 @@ void UART_send_string(const char *str) {
     }
 }
 
+
+float SENSORS_measure_distance(UltrasonicSensor US) {
+    // Send a 10us pulse to trigger pin
+    PORTB &= ~(1 << US.TRIGGER_PIN);
+    _delay_us(2);
+    PORTB |= (1 << US.TRIGGER_PIN);
+    _delay_us(10);
+    PORTB &= ~(1 << US.TRIGGER_PIN);
+
+    long distance = 0;
+    long loop_counter = 0;
+    long loop_max = (23529 * (F_CPU / 1000000)) / 16;
+    bool break_all = false;
+
+    while ((PIND & (1 << US.ECHO_PIN)) == (1 << US.ECHO_PIN)) {
+        if (loop_counter++ == loop_max) {
+            break_all = true;
+            break;
+        }
+    }
+
+    while ((PIND & (1 << US.ECHO_PIN)) != (1 << US.ECHO_PIN) && !break_all) {
+        if (loop_counter++ == loop_max) {
+            break_all = true;
+            break;
+        }
+    }
+
+    while ((PIND & (1 <<US.ECHO_PIN)) == (1 << US.ECHO_PIN) && !break_all) {
+        if (loop_counter++ == loop_max) {
+            break;
+        }
+        distance++;
+    }
+
+    return (float)(distance * (16 / (F_CPU / 1000000))) / 58.8235;
+}
+
+
 int SENSORS_opening_detected() {
     char buffer[32];
     
-    int right = (int) US_RIGHT.dist();
+    int right = (int) SENSORS_measure_distance(US_RIGHT);
     snprintf(buffer, sizeof(buffer), "Right = %d\r\t", right);
     UART_send_string(buffer);
     
-    int left = (int) US_LEFT.dist();
+    int left = (int) SENSORS_measure_distance(US_LEFT);
     snprintf(buffer, sizeof(buffer), "Left = %d\r\t", left);
     UART_send_string(buffer);
     
@@ -161,11 +205,6 @@ float MPU_get_yaw() {
       MPU6050_t data = ICU.get();
       char buffer[16];
       float yaw = (int) data.dir.yaw;
-//      if (yaw >= 360 || yaw <= -360) {
-//          ICU.begin();
-//          ICU.get();
-//          yaw = (int) abs(data.dir.yaw);
-//      }
       dtostrf(yaw, 6, 2, buffer);
       UART_send_string("\nYaw : \t");
       UART_send_string(buffer);
@@ -201,9 +240,16 @@ void GENERAL_init_interrupts() {
 }
 
 void GENERAL_init_ports() {
+    // Outputs
+    DDRB |= (1 << US_RIGHT.TRIGGER_PIN);
+    DDRB |= (1 << US_LEFT.TRIGGER_PIN);
     DDRB |= (1 << SERVO.INPUT_PIN);
     DDRD |= (1 << FAN_LIFT.INPUT_PIN);
     DDRD |= (1 << FAN_STEER.INPUT_PIN);
+
+    //Inputs
+    DDRD &= ~(1 << US_RIGHT.ECHO_PIN);
+    DDRD &= ~(1 << US_LEFT.ECHO_PIN);
 }
 
 void GENERAL_components_setup() {
@@ -261,6 +307,7 @@ void setup() {
     int error= ICU.begin();
     if (error) { UART_send_string("MPU initialization failed :("); }
     GENERAL_components_setup();
+    
     counter = WAIT_AFTER_TURN;
     opening_in_a_row_right = 0;
     opening_in_a_row_left = 0;
