@@ -1,5 +1,6 @@
-#include "mpu6050.h"
 #include "HCSR04.h"
+
+#include "mpu6050.h"
 #include <avr/io.h>
 #include <util/delay.h>
 #include <stdio.h>
@@ -8,26 +9,25 @@
 #include <Wire.h>
 
 // Values to tweak
-#define RANGE_WALL          40
-#define ERROR_TURN_YAW      70
+#define RANGE_WALL          50
+#define ERROR_TURN_YAW      30
 #define WAIT_AFTER_TURN     50
 #define VALUES_IN_A_ROW     2
 
 
 // Constants
 #define FAN_SPEED_MAX       255
-#define FAN_SPEED_LESS      230
-#define FAN_SPEED_LESS_LESS 200
+#define FAN_SPEED_LESS      185
+#define FAN_SPEED_LESS_LESS 155
 #define FAN_SPEED_OFF       0
 
 #define ANGLE_SERVO_RIGHT   170
 #define ANGLE_SERVO_CENTER  90
-#define ANGLE_SERVO_LEFT    10
+#define ANGLE_SERVO_LEFT    15
 
 #define ANGLE_YAW_AWAY      0
 #define ANGLE_YAW_TOWARDS   180
 
-#define PID_PROP            0.5
 
 // Structures
 typedef struct {
@@ -53,6 +53,8 @@ int opening_in_a_row_right = 0;
 int opening_in_a_row_left = 0;
 bool last_was_big_right = false;
 bool last_was_big_left = false;
+int can_i_turn_yet = 0;
+float d_last = 0;
 
 // Functions
 void UART_init() {
@@ -85,17 +87,7 @@ int SENSORS_opening_detected() {
     snprintf(buffer, sizeof(buffer), "Left = %d\r\t", left);
     UART_send_string(buffer);
     
-    if (right >= RANGE_WALL) {
-        opening_in_a_row_right++;
-        if (opening_in_a_row_right == VALUES_IN_A_ROW && last_was_big_right) {
-            opening_in_a_row_right = 0;
-            last_was_big_right = false;
-            return ANGLE_SERVO_RIGHT;
-        } else {
-            last_was_big_right = true;
-            return -1;
-        }
-    }
+
     if (left >= RANGE_WALL) {
         opening_in_a_row_left++;
         if (opening_in_a_row_left == VALUES_IN_A_ROW && last_was_big_left) {
@@ -104,6 +96,17 @@ int SENSORS_opening_detected() {
             return ANGLE_SERVO_LEFT;
         } else {
             last_was_big_left = true;
+            return -1;
+        }
+    }
+    if (right >= RANGE_WALL) {
+        opening_in_a_row_right++;
+        if (opening_in_a_row_right == VALUES_IN_A_ROW && last_was_big_right) {
+            opening_in_a_row_right = 0;
+            last_was_big_right = false;
+            return ANGLE_SERVO_RIGHT;
+        } else {
+            last_was_big_right = true;
             return -1;
         }
     }
@@ -210,22 +213,23 @@ void GENERAL_components_setup() {
 }
 
 void GENERAL_forward_logic() {
-    //this code needs to take 90 (away) or 270 (towards) yaw and orient towards that, ideally the servo stays near 90. This will run until opening is detected.
     float imu_error;
     float yaw = MPU_get_yaw();
     float PID_constant = 0;
     if (target_yaw == ANGLE_YAW_AWAY) {
       imu_error = 90 - (target_yaw - yaw);
       PID_constant = target_yaw - yaw;
-        if(abs(PID_constant) > 5) {                  
-          imu_error += (-PID_constant*1.2);           
-        }
+      float d_input = PID_constant - d_last;
+      d_last = PID_constant;             
+      imu_error += (-(PID_constant * 0.5 + d_input * 2));
     }
     else if (target_yaw == ANGLE_YAW_TOWARDS) {
-      imu_error = (target_yaw - yaw) - 270;      //(180 + 171) - 270 = 81
+      imu_error = 90 - (target_yaw + yaw);      //(180 + 171) - 270 = 81
       PID_constant = target_yaw + yaw;          //180 -171 = 9 
-          if(abs(PID_constant) > 5) {                  
-            imu_error += (PID_constant * 1.2);
+          if(abs(PID_constant) > 5) {
+            float d_input = PID_constant - d_last;
+            d_last = PID_constant;                  
+            imu_error += (PID_constant * 0.5 + d_input * 2);
           }
     }
     
@@ -239,11 +243,28 @@ void GENERAL_forward_logic() {
 
 void GENERAL_turn(float opening_angle) {
     FAN_set_spin(FAN_STEER, FAN_SPEED_LESS_LESS);
-    MPU_change_target_yaw();
     SERVO_change_angle(opening_angle);
-    while (!MPU_is_turn_over()) { }
+    MPU_change_target_yaw();
+    while (!MPU_is_turn_over());
     FAN_set_spin(FAN_STEER, FAN_SPEED_LESS);
+    SERVO_change_angle(90);
+    delay(100);
 }
+
+/*
+void GENERAL_turn(float opening_angle) {
+    FAN_set_spin(FAN_STEER, FAN_SPEED_LESS_LESS);
+    SERVO_change_angle(opening_angle);
+    MPU_change_target_yaw();
+    while(MPU_get_yaw() != 90);
+    SERVO_change_angle(90);
+    delay(20);
+    SERVO_change_angle(opening_angle);
+    while (!MPU_is_turn_over());
+    FAN_set_spin(FAN_STEER, FAN_SPEED_LESS);
+    SERVO_change_angle(90);
+    delay(100);
+}*/
 
 void setup() {
     GENERAL_init_interrupts();
@@ -267,10 +288,13 @@ void loop() {
         counter--;   
     }
     GENERAL_forward_logic();
+    can_i_turn_yet++;
+
     int opening_angle = SENSORS_opening_detected();
-    if (opening_angle != -1 && counter == 0) {
+    if (opening_angle != -1 && counter == 0 && can_i_turn_yet > 30) {
         UART_send_string("TURNIIINNGGG===============");
         GENERAL_turn(opening_angle);
         counter = WAIT_AFTER_TURN;
+        can_i_turn_yet = 0;
     }
 }
