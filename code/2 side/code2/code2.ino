@@ -251,21 +251,6 @@ void GENERAL_turn(float opening_angle) {
     delay(100);
 }
 
-/*
-void GENERAL_turn(float opening_angle) {
-    FAN_set_spin(FAN_STEER, FAN_SPEED_LESS_LESS);
-    SERVO_change_angle(opening_angle);
-    MPU_change_target_yaw();
-    while(MPU_get_yaw() != 90);
-    SERVO_change_angle(90);
-    delay(20);
-    SERVO_change_angle(opening_angle);
-    while (!MPU_is_turn_over());
-    FAN_set_spin(FAN_STEER, FAN_SPEED_LESS);
-    SERVO_change_angle(90);
-    delay(100);
-}*/
-
 void setup() {
     GENERAL_init_interrupts();
     GENERAL_init_ports();
