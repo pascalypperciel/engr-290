@@ -1,12 +1,12 @@
 #define F_CPU 16000000UL
 
+#include <avr/interrupt.h>
 #include <avr/io.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <util/delay.h>
 #include <util/twi.h>
-#include <stdio.h>
-#include <stdbool.h>
-#include <avr/interrupt.h>
-#include "mpu6050.h"
 
 // Values to tweak
 #define RANGE_WALL          50
@@ -46,22 +46,49 @@ typedef struct {
 } Fan;
 
 typedef struct {
-    uint8_t SDA_PIN;
-    uint8_t SCL_PIN;
+    int16_t X;
+    int16_t Y;
+    int16_t Z;
 } Gyroscope;
 
+typedef struct {
+    float ROLL;
+    float PITCH;
+    float YAW;
+    float ANGLE_X;
+    float ANGLE_Y;
+    float ANGLE_Z;
+    uint32_t TIME;
+    int ERRORS;
+} Directions;
+
+typedef struct {
+    uint8_t SDA_PIN;
+    uint8_t SCL_PIN;
+    int ADDRESS;
+    Gyroscope GYRO;
+    Directions DIRECTIONS;
+} InertialMeasurementUnit;
+
+typedef struct {
+    float GYRO_X;
+    float GYRO_Y;
+    float GYRO_Z;
+} Calibration;
+
 // Components
-UltrasonicSensor  US_RIGHT =  {PD2, PB3};
-UltrasonicSensor  US_LEFT =   {PD3, PB5};
-ServoMotor        SERVO =     {PB1};
-Fan               FAN_LIFT =  {PD5};
-Fan               FAN_STEER = {PD6};
-Gyroscope         IMU =       {PC4, PC5};  
-MPU6050           ICU;
+UltrasonicSensor        US_RIGHT =    {PD2, PB3};
+UltrasonicSensor        US_LEFT =     {PD3, PB5};
+ServoMotor              SERVO =       {PB1};
+Fan                     FAN_LIFT =    {PD5};
+Fan                     FAN_STEER =   {PD6};
+InertialMeasurementUnit IMU =         {PC4, PC5, 0x68, {0, 0, 0}, {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0}};
+
+//Others
+Calibration             CALIBRATION = {0, 0, 0};
 
 // Global variable
 int _target_yaw = ANGLE_YAW_AWAY;
-int _counter = WAIT_AFTER_TURN;
 int _opening_in_a_row_right = 0;
 int _opening_in_a_row_left = 0;
 bool _last_was_big_right = false;
@@ -210,25 +237,22 @@ bool MPU_is_turn_over() {
 }
 
 float MPU_get_yaw() {
-    MPU6050_t data = ICU.get();
+    float yaw = IMU_get_yaw();
     char buffer[16];
-    float yaw = (int) data.dir.yaw;
-    dtostrf(yaw, 6, 2, buffer);
+    dtostrf((int)yaw, 6, 2, buffer);
     UART_send_string("\nYaw : \t");
     UART_send_string(buffer);
     return yaw;
 }
 
 float MPU_get_yaw_turning() {
-    MPU6050_t data = ICU.get();
     char buffer[32];
     char _target_yaw_buffer[16];
     
-    int yaw = (int) abs(data.dir.yaw);
+    int yaw = (int) abs(IMU.DIRECTIONS.YAW);
     if (yaw >= 360 || yaw <= -360) {
-        ICU.begin();
-        ICU.get();
-        yaw = (int) abs(data.dir.yaw);
+        IMU_init();
+        yaw = (int) abs(IMU_get_yaw());
     }
     
     dtostrf(yaw, 6, 2, buffer);
@@ -277,12 +301,103 @@ uint8_t I2C_read(bool ack) {
 }
 
 bool IMU_init() {
-    if (IMU_absent() || IMU_wake() || IMU_set_rate_divider() || IMU_set_acceleration_range() ||
-        IMU_set_gyroscope_range() || IMU_set_DLPF_bandwidth() || IMU_calibrate()) {
-            return false;
-        }
+    I2C_init();
+    if (IMU_absent() || IMU_wake() || IMU_set_rate_divider() || IMU_set_DLPF_bandwidth() || IMU_calibrate()) {
+        return false;
+    }
 
-    int error = IMU_calibrate()
+    IMU.DIRECTIONS.TIME = GENERAL_millis();
+
+    return true;
+}
+
+float IMU_get_yaw() {
+    IMU_update_yaw();
+    return IMU.DIRECTIONS.YAW;
+}
+
+int16_t IMU_read_gyroscope_yaw() {
+    int16_t gyro_raw_x, gyro_raw_y, gyro_raw_z;
+    IMU_read_3x16(0x43, (uint16_t*)&gyro_raw_x, (uint16_t*)&gyro_raw_y, (uint16_t*)&gyro_raw_z);
+    return gyro_raw_z * (1.0/131.0) - CALIBRATION.GYRO_Z;
+}
+
+void IMU_update_yaw() {
+    float gyro_z = IMU_read_gyroscope_yaw();
+    uint32_t now = GENERAL_millis();
+    float time_difference = (now - IMU.DIRECTIONS.TIME) / 1000.0;
+    IMU.DIRECTIONS.TIME = now;
+    IMU.DIRECTIONS.ANGLE_Z += gyro_z * time_difference;
+    IMU.DIRECTIONS.YAW = 1.00 * IMU.DIRECTIONS.ANGLE_Z;
+}
+
+bool IMU_absent() {
+    uint8_t val;
+    if (IMU_read_8(0x75, &val)) return true;
+    if (val != 0x68) return true;
+    return false;
+}
+
+bool IMU_wake() {
+    return IMU_write_8(0x6B, 0b00000000);
+}
+
+bool IMU_set_rate_divider() {
+    uint8_t field = static_cast<uint8_t>(6);
+    return IMU_write_8(0x19, field);
+}
+
+bool IMU_set_DLPF_bandwidth() {
+    uint8_t field = static_cast<uint8_t>(0);
+    uint8_t val;
+    if (IMU_read_8(0x1A, &val)) return true;
+    val = (val & 0b11111000) | field;
+    return IMU_write_8(0x1A, val);
+}
+
+bool IMU_calibrate() {
+    Calibration cal;
+    cal.GYRO_Z = 0;
+
+    for (int i = 0; i < 500; i++) {
+        cal.GYRO_Z += IMU_read_gyroscope_yaw();
+    }
+    
+    CALIBRATION.GYRO_Z = cal.GYRO_Z / 500;
+    return true;
+}
+
+bool IMU_read_8(uint8_t addr, uint8_t *value) {
+    I2C_start();
+    if (!I2C_write(0x68 << 1)) return true;
+    if (!I2C_write(addr)) return true;
+    I2C_start();
+    if (!I2C_write((0x68 << 1) | 1)) return true;
+    *value = I2C_read(false);
+    I2C_stop();
+    return false;
+}
+
+bool IMU_read_3x16(uint8_t addr, uint16_t *value0, uint16_t *value1, uint16_t *value2) {
+    I2C_start();
+    if (!I2C_write(0x68 << 1)) return true;
+    if (!I2C_write(addr)) return true;
+    I2C_start();
+    if (!I2C_write((0x68 << 1) | 1)) return true;
+    *value0 = (I2C_read(true) << 8) | I2C_read(true);
+    *value1 = (I2C_read(true) << 8) | I2C_read(true);
+    *value2 = (I2C_read(true) << 8) | I2C_read(false);
+    I2C_stop();
+    return false;
+}
+
+bool IMU_write_8(uint8_t addr, uint8_t value) {
+    I2C_start();
+    if (!I2C_write(0x68 << 1)) return true;
+    if (!I2C_write(addr)) return true;
+    if (!I2C_write(value)) return true;
+    I2C_stop();
+    return false;
 }
 
 unsigned long GENERAL_millis()
@@ -345,8 +460,8 @@ void GENERAL_go_forward() {
       imu_error += (-(PID_constant * 0.5 + d_input * 2));
     }
     else if (_target_yaw == ANGLE_YAW_TOWARDS) {
-      imu_error = 90 - (_target_yaw + yaw);      //(180 + 171) - 270 = 81
-      PID_constant = _target_yaw + yaw;          //180 -171 = 9 
+      imu_error = 90 - (_target_yaw + yaw);
+      PID_constant = _target_yaw + yaw;
           if(abs(PID_constant) > 5) {
             float d_input = PID_constant - _d_last;
             _d_last = PID_constant;                  
@@ -379,28 +494,25 @@ int main(void) {
     UART_init();
     SERVO_init_timer1();
 //    FAN_init();
-    GENERAL_TWI_init();
-    int error = ICU.begin();
-    if (error) { UART_send_string("MPU initialization failed :("); }
+    IMU_init();
     GENERAL_components_setup();
     
-    _counter = WAIT_AFTER_TURN;
+    int counter = WAIT_AFTER_TURN;
     _opening_in_a_row_right = 0;
     _opening_in_a_row_left = 0;
     _last_was_big_right = false;
     _last_was_big_left = false;
 
     while (1) {
-        if (_counter > 0) {
-            _counter--;   
+        if (counter > 0) {
+            counter--;   
         }
-        GENERAL_forward_logic();
+        GENERAL_go_forward();
     
         int opening_angle = SENSORS_opening_detected();
-        if (opening_angle != -1 && _counter == 0) {
+        if (opening_angle != -1 && counter == 0) {
             GENERAL_make_turn(opening_angle);
-            _counter = WAIT_AFTER_TURN;
-            _can_i_turn_yet = 0;
+            counter = WAIT_AFTER_TURN;
         }
     }
 }
