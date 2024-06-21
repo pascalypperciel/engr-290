@@ -199,29 +199,7 @@ float MPU6050::angle_y(MPU6050_Accel_t accel) {
 #define MPU6050_MINSAMPLES 10
 int MPU6050::calibrate(int numsamples) {
     MPU6050_Calibrate_t cal;
-    // Check that numsamples is big "enough"
-    if( numsamples<MPU6050_MINSAMPLES ) return 13;
-    
-    // Calibrate Accelerometer
-   
-    // Reset accel calibration parameters; they are used in readAcceleration()
-    _calibrate.accel_x= 0;
-    _calibrate.accel_y= 0;
-    // Now take 'numsamples' accel samples
-    cal.accel_x= 0;
-    cal.accel_y= 0;
     int numerrors= 0;
-    for( int sample=0; sample<numsamples; sample++ ) {
-        MPU6050_Accel_t accel= readAcceleration();
-        if( accel.error!=0 ) { numerrors++; continue; } // Reject sample on I2C error
-        cal.accel_x+= angle_x(accel);
-        cal.accel_y+= angle_y(accel);
-    }
-    // Reject calibration if too many I2C errors
-    if( numsamples-numerrors < MPU6050_MINSAMPLES ) return 13;
-    // Store new accel calibration parameters
-    _calibrate.accel_x= cal.accel_x/numsamples;
-    _calibrate.accel_y= cal.accel_y/numsamples;
     
     // Calibrate Gyroscope
     
@@ -365,4 +343,3 @@ const char* MPU6050::error_str(int error ) {
         default: return "<unknown>";        
     }
 }
-

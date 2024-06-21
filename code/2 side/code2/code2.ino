@@ -1,5 +1,6 @@
 #define F_CPU 16000000UL
 
+#include <Wire.h>
 #include <avr/interrupt.h>
 #include <avr/io.h>
 #include <stdbool.h>
@@ -121,7 +122,7 @@ bool IMU_init(void);
 float IMU_get_yaw(void);
 float IMU_read_gyroscope_yaw(void);
 void IMU_update_yaw(void);
-bool IMU_absent(void);
+int IMU_absent(void);
 bool IMU_wake(void);
 bool IMU_set_rate_divider(void);
 bool IMU_set_DLPF_bandwidth(void);
@@ -288,13 +289,9 @@ float MPU_get_yaw_turning() {
   char buffer[32];
   char _target_yaw_buffer[16];
   
-  int yaw = (int) abs(IMU.DIRECTIONS.YAW);
-  if (yaw >= 360 || yaw <= -360) {
-    IMU_init();
-    yaw = (int) abs(IMU_get_yaw());
-  }
+  float yaw = IMU_get_yaw();
   
-  dtostrf(yaw, 6, 2, buffer);
+  dtostrf((int)yaw, 6, 2, buffer);
   dtostrf(_target_yaw, 6, 2, _target_yaw_buffer);
   
   strcat(buffer, " _target_yaw: ");
@@ -344,7 +341,7 @@ bool IMU_init() {
   if (IMU_absent() || IMU_wake() || IMU_set_rate_divider() ||
       IMU_set_DLPF_bandwidth() || IMU_calibrate()) {
     return false;
-  }
+      }
 
   IMU.DIRECTIONS.TIME = GENERAL_millis();
 
@@ -371,11 +368,12 @@ void IMU_update_yaw() {
   IMU.DIRECTIONS.YAW = 1.00 * IMU.DIRECTIONS.ANGLE_Z;
 }
 
-bool IMU_absent() {
-  uint8_t val;
-  if (IMU_read_8(0x75, &val)) return true;
-  if (val != 0x68) return true;
-  return false;
+int IMU_absent() {
+    uint8_t val;
+    int error= IMU_read_8(0x75,&val);
+    if( error!=0 ) return error;
+    if( val!= 0x68 ) return -1;
+    return 0;
 }
 
 bool IMU_wake() {
@@ -383,15 +381,13 @@ bool IMU_wake() {
 }
 
 bool IMU_set_rate_divider() {
-  uint8_t field = 6;
-  return IMU_write_8(0x19, field);
+  return IMU_write_8(0x19, 6);
 }
 
 bool IMU_set_DLPF_bandwidth() {
-  uint8_t field = 0;
   uint8_t val;
   if (IMU_read_8(0x1A, &val)) return true;
-  val = (val & 0b11111000) | field;
+  val = (val & 0b11111000) | 0;
   return IMU_write_8(0x1A, val);
 }
 
@@ -405,41 +401,75 @@ bool IMU_calibrate() {
   }
   
   CALIBRATION.GYRO_Z = cal.GYRO_Z / 500;
-  return true;
+  return false;
 }
 
+
+// Read 'value' from the registers starting at 'addr'. Returns error; see error_str() for explanation.
 bool IMU_read_8(uint8_t addr, uint8_t *value) {
-  I2C_start();
-  if (!I2C_write(0x68 << 1)) return true;
-  if (!I2C_write(addr)) return true;
-  I2C_start();
-  if (!I2C_write((0x68 << 1) | 1)) return true;
-  *value = I2C_read(false);
-  I2C_stop();
-  return false;
+    *value=0;
+    Wire.beginTransmission(0x68);
+    int r1=Wire.write(addr);                                       if( r1!=1 ) return 10;
+    int r2=Wire.endTransmission(false);                            if( r2!=0 ) return 2;
+    int r3=Wire.requestFrom(0x68,(uint8_t)1,(uint8_t)true); if( r3!=1 ) return 11;
+    *value=Wire.read();
+    return 0;
 }
 
-bool IMU_read_3x16(uint8_t addr, uint16_t *value0, uint16_t *value1, uint16_t *value2) {
-  I2C_start();
-  if (!I2C_write(0x68 << 1)) return true;
-  if (!I2C_write(addr)) return true;
-  I2C_start();
-  if (!I2C_write((0x68 << 1) | 1)) return true;
-  *value0 = (I2C_read(true) << 8) | I2C_read(true);
-  *value1 = (I2C_read(true) << 8) | I2C_read(true);
-  *value2 = (I2C_read(true) << 8) | I2C_read(false);
-  I2C_stop();
-  return false;
+// Read 3x'value' from the 3 registers starting at 'addr'. Returns error; see error_str() for explanation.
+bool IMU_read_3x16(uint8_t addr, uint16_t *value0,  uint16_t *value1, uint16_t *value2 ) {
+    *value0= *value1= *value2= 0;
+    Wire.beginTransmission(0x68);
+    int r1=Wire.write(addr);                                       if( r1!=1 ) return 10;
+    int r2=Wire.endTransmission(false);                            if( r2!=0 ) return r2;
+    int r3=Wire.requestFrom(0x68,(uint8_t)6,(uint8_t)true); if( r3!=6 ) return 11;
+    *value0=Wire.read()<<8 | Wire.read(); 
+    *value1=Wire.read()<<8 | Wire.read(); 
+    *value2=Wire.read()<<8 | Wire.read(); 
+    return 0;
 }
 
+// Write 'value' to register at address 'addr'. Returns error; see error_str() for explanation.
 bool IMU_write_8(uint8_t addr, uint8_t value) {
-  I2C_start();
-  if (!I2C_write(0x68 << 1)) return true;
-  if (!I2C_write(addr)) return true;
-  if (!I2C_write(value)) return true;
-  I2C_stop();
-  return false;
+    Wire.beginTransmission(0x68);
+    int r1=Wire.write(addr);                                       if( r1!=1 ) return 10;
+    int r2=Wire.write(value);                                      if( r2!=1 ) return 10;
+    int r3=Wire.endTransmission(true);                             if( r3!=0 ) return r3;
+    return 0;
 }
+
+//bool IMU_read_8(uint8_t addr, uint8_t *value) {
+//  I2C_start();
+//  if (!I2C_write(0x68 << 1)) return true;
+//  if (!I2C_write(addr)) return true;
+//  I2C_start();
+//  if (!I2C_write((0x68 << 1) | 1)) return true;
+//  *value = I2C_read(false);
+//  I2C_stop();
+//  return false;
+//}
+//
+//bool IMU_read_3x16(uint8_t addr, uint16_t *value0, uint16_t *value1, uint16_t *value2) {
+//  I2C_start();
+//  if (!I2C_write(0x68 << 1)) return true;
+//  if (!I2C_write(addr)) return true;
+//  I2C_start();
+//  if (!I2C_write((0x68 << 1) | 1)) return true;
+//  *value0 = (I2C_read(true) << 8) | I2C_read(true);
+//  *value1 = (I2C_read(true) << 8) | I2C_read(true);
+//  *value2 = (I2C_read(true) << 8) | I2C_read(false);
+//  I2C_stop();
+//  return false;
+//}
+//
+//bool IMU_write_8(uint8_t addr, uint8_t value) {
+//  I2C_start();
+//  if (!I2C_write(0x68 << 1)) return true;
+//  if (!I2C_write(addr)) return true;
+//  if (!I2C_write(value)) return true;
+//  I2C_stop();
+//  return false;
+//}
 
 unsigned long GENERAL_millis()
 {
@@ -529,6 +559,7 @@ void GENERAL_make_turn(float opening_angle) {
 }
 
 int main(void) {
+  Wire.begin();
   GENERAL_init_timer0();
   GENERAL_init_interrupts();
   GENERAL_init_ports();
@@ -558,7 +589,7 @@ int main(void) {
   }
 }
 
-ISR(TIMER0_OVF_vect)
+ISR(TIMER0_OVF_vect) 
 {
   unsigned long m = _timer0_millis;
   unsigned char f = _timer0_fract;
