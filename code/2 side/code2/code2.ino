@@ -32,7 +32,6 @@
 typedef struct {
     uint8_t ECHO_PIN;
     uint8_t TRIGGER_PIN;
-    const char* ID;
 } UltrasonicSensor;
 
 typedef struct {
@@ -41,14 +40,20 @@ typedef struct {
 
 typedef struct {
     uint8_t INPUT_PIN;
-} FAN;
+} Fan;
+
+typedef struct {
+    uint8_t SDA_PIN;
+    uint8_t SCL_PIN;
+} Gyroscope;
 
 // Components
-UltrasonicSensor  US_RIGHT =  {PD2, PB3, "Front"};
-UltrasonicSensor  US_LEFT =   {PD3, PB5, "Side"};
+UltrasonicSensor  US_RIGHT =  {PD2, PB3};
+UltrasonicSensor  US_LEFT =   {PD3, PB5};
 ServoMotor        SERVO =     {PB1};
-FAN               FAN_LIFT =  {PD5};
-FAN               FAN_STEER = {PD6};
+Fan               FAN_LIFT =  {PD5};
+Fan               FAN_STEER = {PD6};
+Gyroscope         IMU =       {PC4, PC5};  
 MPU6050           ICU;
 
 // Global variable
@@ -197,42 +202,84 @@ void MPU_change_target_yaw() {
 }
 
 bool MPU_is_turn_over() {
-      float current_yaw = MPU_get_yaw_turning();
-      return current_yaw >= target_yaw - ERROR_TURN_YAW && current_yaw <= target_yaw + ERROR_TURN_YAW;
+    float current_yaw = MPU_get_yaw_turning();
+    return current_yaw >= target_yaw - ERROR_TURN_YAW && current_yaw <= target_yaw + ERROR_TURN_YAW;
 }
 
 float MPU_get_yaw() {
-      MPU6050_t data = ICU.get();
-      char buffer[16];
-      float yaw = (int) data.dir.yaw;
-      dtostrf(yaw, 6, 2, buffer);
-      UART_send_string("\nYaw : \t");
-      UART_send_string(buffer);
-      return yaw;
+    MPU6050_t data = ICU.get();
+    char buffer[16];
+    float yaw = (int) data.dir.yaw;
+    dtostrf(yaw, 6, 2, buffer);
+    UART_send_string("\nYaw : \t");
+    UART_send_string(buffer);
+    return yaw;
 }
 
 float MPU_get_yaw_turning() {
-      MPU6050_t data = ICU.get();
-      char buffer[32];
-      char target_yaw_buffer[16];
-      
-      int yaw = (int) abs(data.dir.yaw);
-      if (yaw >= 360 || yaw <= -360) {
-          ICU.begin();
-          ICU.get();
-          yaw = (int) abs(data.dir.yaw);
-      }
-  
-      dtostrf(yaw, 6, 2, buffer);
-      dtostrf(target_yaw, 6, 2, target_yaw_buffer);
-  
-      strcat(buffer, " target_yaw: ");
-      strcat(buffer, target_yaw_buffer);
-  
-      UART_send_string("\nYee: \t");
-      UART_send_string(buffer);
-      
-      return yaw;
+    MPU6050_t data = ICU.get();
+    char buffer[32];
+    char target_yaw_buffer[16];
+    
+    int yaw = (int) abs(data.dir.yaw);
+    if (yaw >= 360 || yaw <= -360) {
+        ICU.begin();
+        ICU.get();
+        yaw = (int) abs(data.dir.yaw);
+    }
+    
+    dtostrf(yaw, 6, 2, buffer);
+    dtostrf(target_yaw, 6, 2, target_yaw_buffer);
+    
+    strcat(buffer, " target_yaw: ");
+    strcat(buffer, target_yaw_buffer);
+    
+    UART_send_string("\nYee: \t");
+    UART_send_string(buffer);
+    
+    return yaw;
+}
+
+void I2C_init() {
+    TWSR = 0x00;
+    TWBR = ((F_CPU / 100000L) - 16) / 2;
+    TWCR = (1 << TWEN);
+}
+
+void I2C_start() {
+    TWCR = (1 << TWINT) | (1 << TWSTA) | (1 << TWEN);
+    while (!(TWCR & (1 << TWINT)));
+}
+
+void I2C_stop() {
+    TWCR = (1 << TWINT) | (1 << TWSTO) | (1 << TWEN);
+    while (TWCR & (1 << TWSTO));
+}
+
+bool I2C_write(uint8_t data) {
+    TWDR = data;
+    TWCR = (1 << TWINT) | (1 << TWEN);
+    while (!(TWCR & (1 << TWINT)));
+    return (TWSR & 0xF8) == TW_MT_DATA_ACK;
+}
+
+uint8_t I2C_read(bool ack) {
+    if (ack) {
+        TWCR = (1 << TWINT) | (1 << TWEA) | (1 << TWEN);
+    } else {
+        TWCR = (1 << TWINT) | (1 << TWEN);
+    }
+    while (!(TWCR & (1 << TWINT)));
+    return TWDR;
+}
+
+bool IMU_init() {
+    if (IMU_absent() || IMU_wake() || IMU_set_rate_divider() || IMU_set_acceleration_range() ||
+        IMU_set_gyroscope_range() || IMU_set_DLPF_bandwidth() || IMU_calibrate()) {
+            return false;
+        }
+
+    int error = IMU_calibrate()
 }
 
 void GENERAL_init_interrupts() {
@@ -244,12 +291,18 @@ void GENERAL_init_ports() {
     DDRB |= (1 << US_RIGHT.TRIGGER_PIN);
     DDRB |= (1 << US_LEFT.TRIGGER_PIN);
     DDRB |= (1 << SERVO.INPUT_PIN);
+    DDRC |= (1 << IMU.SDA_PIN);
+    DDRC |= (1 << IMU.SCL_PIN);
     DDRD |= (1 << FAN_LIFT.INPUT_PIN);
     DDRD |= (1 << FAN_STEER.INPUT_PIN);
 
-    //Inputs
+    // Inputs
     DDRD &= ~(1 << US_RIGHT.ECHO_PIN);
     DDRD &= ~(1 << US_LEFT.ECHO_PIN);
+
+    //Set high
+    PORTC |= (1 << IMU.SDA_PIN);
+    PORTC |= (1 << IMU.SCL_PIN);
 }
 
 void GENERAL_components_setup() {
@@ -258,7 +311,7 @@ void GENERAL_components_setup() {
     FAN_set_spin(FAN_STEER, FAN_SPEED_LESS);
 }
 
-void GENERAL_forward_logic() {
+void GENERAL_go_forward() {
     float imu_error;
     float yaw = MPU_get_yaw();
     float PID_constant = 0;
@@ -287,7 +340,7 @@ void GENERAL_forward_logic() {
     SERVO_change_angle(imu_error);
 }
 
-void GENERAL_turn(float opening_angle) {
+void GENERAL_make_turn(float opening_angle) {
     FAN_set_spin(FAN_STEER, FAN_SPEED_LESS_LESS);
     SERVO_change_angle(opening_angle);
     MPU_change_target_yaw();
@@ -295,12 +348,6 @@ void GENERAL_turn(float opening_angle) {
     FAN_set_spin(FAN_STEER, FAN_SPEED_LESS);
     SERVO_change_angle(90);
     delay(100);
-}
-
-void GENERAL_TWI_init() {
-    TWSR = 0x00;
-    TWBR = ((F_CPU / 100000L) - 16) / 2;
-    TWCR = (1 << TWEN);
 }
 
 void setup() {
