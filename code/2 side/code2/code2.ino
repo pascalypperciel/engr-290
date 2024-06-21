@@ -1,10 +1,12 @@
-#include "mpu6050.h"
+#define F_CPU 16000000UL
+
 #include <avr/io.h>
 #include <util/delay.h>
+#include <util/twi.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <avr/interrupt.h>
-#include <Wire.h>
+#include "mpu6050.h"
 
 // Values to tweak
 #define RANGE_WALL          50
@@ -25,8 +27,6 @@
 
 #define ANGLE_YAW_AWAY      0
 #define ANGLE_YAW_TOWARDS   180
-
-#define F_CPU 16000000UL
 
 // Structures
 typedef struct {
@@ -297,13 +297,19 @@ void GENERAL_turn(float opening_angle) {
     delay(100);
 }
 
+void GENERAL_TWI_init() {
+    TWSR = 0x00;
+    TWBR = ((F_CPU / 100000L) - 16) / 2;
+    TWCR = (1 << TWEN);
+}
+
 void setup() {
     GENERAL_init_interrupts();
     GENERAL_init_ports();
     UART_init();
     SERVO_init_timer1();
     FAN_init();
-    Wire.begin();
+    GENERAL_TWI_init();
     int error= ICU.begin();
     if (error) { UART_send_string("MPU initialization failed :("); }
     GENERAL_components_setup();
