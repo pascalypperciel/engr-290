@@ -1,6 +1,5 @@
 #define F_CPU 16000000UL
 
-#include <Wire.h>
 #include <avr/interrupt.h>
 #include <avr/io.h>
 #include <stdbool.h>
@@ -28,9 +27,48 @@
 #define ANGLE_YAW_AWAY      0
 #define ANGLE_YAW_TOWARDS   180
 
-#define MILLIS_INC 1
-#define FRACT_INC 3
-#define FRACT_MAX 1000
+#define MILLIS_INC          1
+#define FRACT_INC           3
+#define FRACT_MAX           1000
+
+#define MPU6050_ADDRESS     0x68
+#define TWI_BUFFER_LENGTH   32
+
+#define   TW_START   0x08
+#define   TW_REP_START   0x10
+#define   TW_MT_SLA_ACK   0x18
+#define   TW_MT_SLA_NACK   0x20
+#define   TW_MT_DATA_ACK   0x28
+#define   TW_MT_DATA_NACK   0x30
+#define   TW_MT_ARB_LOST   0x38
+#define   TW_MR_ARB_LOST   0x38
+#define   TW_MR_SLA_ACK   0x40
+#define   TW_MR_SLA_NACK   0x48
+#define   TW_MR_DATA_ACK   0x50
+#define   TW_MR_DATA_NACK   0x58
+#define   TW_ST_SLA_ACK   0xA8
+#define   TW_ST_ARB_LOST_SLA_ACK   0xB0
+#define   TW_ST_DATA_ACK   0xB8
+#define   TW_ST_DATA_NACK   0xC0
+#define   TW_ST_LAST_DATA   0xC8
+#define   TW_SR_SLA_ACK   0x60
+#define   TW_SR_ARB_LOST_SLA_ACK   0x68
+#define   TW_SR_GCALL_ACK   0x70
+#define   TW_SR_ARB_LOST_GCALL_ACK   0x78
+#define   TW_SR_DATA_ACK   0x80
+#define   TW_SR_DATA_NACK   0x88
+#define   TW_SR_GCALL_DATA_ACK   0x90
+#define   TW_SR_GCALL_DATA_NACK   0x98
+#define   TW_SR_STOP   0xA0
+#define   TW_NO_INFO   0xF8
+#define   TW_BUS_ERROR   0x00
+#define   TW_READ   1 
+#define   TW_WRITE   0
+#define   TWI_READY 0
+#define   TWI_MRX   1
+#define   TWI_MTX   2
+#define   TWI_SRX   3
+#define   TWI_STX   4
 
 // Structures
 typedef struct {
@@ -98,6 +136,25 @@ float _d_last = 0;
 volatile unsigned long _timer0_millis = 0;
 volatile unsigned char _timer0_fract = 0;
 static unsigned long _timer0_overflow_count = 0;
+uint8_t _IMU_transmitting = 1;
+uint8_t _IMU_transmit_buffer_index = 0;
+uint8_t _IMU_transmit_buffer_length = 0;
+uint8_t _IMU_transmit_buffer[TWI_BUFFER_LENGTH];
+uint8_t _IMU_receive_buffer[TWI_BUFFER_LENGTH];
+uint8_t _IMU_receive_buffer_index = 0;
+uint8_t _IMU_receive_buffer_length = 0;
+uint8_t _TWI_transmit_buffer_length = 0;
+uint8_t _TWI_transmit_buffer[TWI_BUFFER_LENGTH];
+static volatile uint8_t _TWI_state;
+static volatile uint8_t _TWI_error;
+uint8_t _TWI_send_stop = true;
+uint8_t _TWI_master_buffer_index = 0;
+uint8_t _TWI_master_buffer_length = 0;
+uint8_t _TWI_master_buffer[TWI_BUFFER_LENGTH];
+uint8_t _TWI_in_rep_start = false;
+static volatile uint8_t _TWI_slarw;
+uint8_t _TWI_timeout_us;
+bool _TWI_timed_out_flag;
 
 // Function Declarations
 void UART_init(void);
@@ -113,11 +170,6 @@ void MPU_change_target_yaw(void);
 bool MPU_is_turn_over(void);
 float MPU_get_yaw(void);
 float MPU_get_yaw_turning(void);
-void I2C_init(void);
-void I2C_start(void);
-void I2C_stop(void);
-bool I2C_write(uint8_t data);
-uint8_t I2C_read(bool ack);
 bool IMU_init(void);
 float IMU_get_yaw(void);
 float IMU_read_gyroscope_yaw(void);
@@ -125,9 +177,9 @@ void IMU_update_yaw(void);
 int IMU_absent(void);
 bool IMU_wake(void);
 bool IMU_set_rate_divider(void);
-bool IMU_set_DLPF_bandwidth(void);
+int IMU_set_DLPF_bandwidth(void);
 bool IMU_calibrate(void);
-bool IMU_read_8(uint8_t addr, uint8_t *value);
+int IMU_read_8(uint8_t addr, uint8_t *value);
 bool IMU_read_3x16(uint8_t addr, uint16_t *value0, uint16_t *value1, uint16_t *value2);
 bool IMU_write_8(uint8_t addr, uint8_t value);
 unsigned long GENERAL_millis(void);
@@ -263,6 +315,140 @@ void SERVO_change_angle(float angle) {
 //    }
 //}
 
+void TWI_init() {
+  TWSR &= ~((1 << TWPS0) | (1 << TWPS1));
+  TWBR = ((F_CPU / 100000L) - 16) / 2;
+  TWCR = (1 << TWEN) | (1 << TWEA) | (1 << TWIE);
+  _TWI_state = TWI_READY;
+  _TWI_send_stop = true;
+  _TWI_in_rep_start = false;
+  _TWI_timed_out_flag = false;
+}
+
+uint8_t TWI_transmit(const uint8_t* data, uint8_t length) {
+  uint8_t i;
+
+  if (TWI_BUFFER_LENGTH < (_TWI_transmit_buffer_length + length)) {
+    return 1;
+  }
+
+  for (int i = 0; i < length; ++i) {
+    _TWI_transmit_buffer[_TWI_transmit_buffer_length + i] = data[i];
+  }
+  _TWI_transmit_buffer_length += length;
+
+  return 0;
+}
+
+void TWI_handle_timeout(bool reset) {
+  _TWI_timed_out_flag = true;
+
+  if (reset) {
+    //todo
+  }
+}
+
+uint8_t TWI_write(uint8_t address, uint8_t* data, uint8_t length, uint8_t wait, uint8_t send_stop) {
+  uint8_t i;
+
+  if (TWI_BUFFER_LENGTH < length) {
+    return 1;
+  }
+
+  uint32_t start_micros = GENERAL_micros();
+//  while (_TWI_state != 0) {
+//    if ((GENERAL_micros() - start_micros) > 0ul) {
+//      TWI_handle_timeout(false);
+//      return (5);
+//    }
+//  }
+  _TWI_state = 2;
+  _TWI_send_stop = send_stop;
+  _TWI_error = 0xFF;
+
+  _TWI_master_buffer_index = 0;
+  _TWI_master_buffer_length = length;
+
+  for (int i = 0; i < length; ++i) {
+    _TWI_master_buffer[i] = data[i];
+  }
+
+  _TWI_slarw = 0;
+  _TWI_slarw |= address << 1;
+
+  if (_TWI_in_rep_start) {
+    _TWI_in_rep_start = false;
+    start_micros = GENERAL_micros();
+    do {
+      TWDR = _TWI_slarw;
+//      if ((GENERAL_micros() - start_micros) > 0ul) {
+//        TWI_handle_timeout(false);
+//        return (5);
+//      }
+    } while (TWCR & (1 << TWWC));
+    TWCR = (1 << TWINT) | (1 << TWEA) | (1 << TWEN) | (1 << TWIE);
+  } else {
+    TWCR = (1 << TWINT) | (1 << TWEA) | (1 << TWEN) | (1 << TWIE) | (1 << TWSTA);
+  }
+
+  return 0;
+}
+
+uint8_t TWI_read(uint8_t address, uint8_t* data, uint8_t length, uint8_t send_stop) {
+  uint8_t i;
+
+  if (TWI_BUFFER_LENGTH < length) {
+    return 0;
+  }
+  
+  uint32_t start_micros = GENERAL_micros();
+  while (_TWI_state != TWI_READY) {
+    if ((GENERAL_micros() - start_micros) > 10000) {
+      TWI_handle_timeout(false);
+      return 69421;
+    }
+  }
+
+  _TWI_state = TWI_MRX;
+  _TWI_send_stop = send_stop;
+  _TWI_error = 0xFF;
+
+  _TWI_master_buffer_index = 0;
+  _TWI_master_buffer_length = length - 1;
+  
+  _TWI_slarw = 1;
+  _TWI_slarw |= address << 1;
+
+  if (_TWI_in_rep_start) {
+    _TWI_in_rep_start = false;
+    start_micros = GENERAL_micros();
+    do {
+      TWDR = _TWI_slarw;
+    } while (TWCR & (1 << TWWC));
+    TWCR = (1 << TWINT) | (1 << TWEA) | (1 << TWEN) | (1 << TWIE);
+  } else {
+    TWCR = (1 << TWEN) | (1 << TWIE) | (1 << TWEA) | (1 << TWINT) | (1 << TWSTA);
+  }
+
+  start_micros = GENERAL_micros();
+  while (_TWI_state == TWI_MRX) {
+    if ((GENERAL_micros() - start_micros) > 10000) {
+      TWI_handle_timeout(false);
+      return 69421;
+    }
+  }
+
+  if (_TWI_master_buffer_index < length) {
+    length = _TWI_master_buffer_index;
+  }
+
+  for (int i = 0; i < length; ++i) {
+    data[i] = _TWI_master_buffer[i];
+  }
+
+  return length;
+}
+
 void MPU_change_target_yaw() {
   if (_target_yaw == ANGLE_YAW_AWAY) {
     _target_yaw = ANGLE_YAW_TOWARDS;
@@ -303,45 +489,32 @@ float MPU_get_yaw_turning() {
   return yaw;
 }
 
-void I2C_init() {
-  TWSR = 0x00;
-  TWBR = ((F_CPU / 100000L) - 16) / 2;
-  TWCR = (1 << TWEN);
-}
-
-void I2C_start() {
-  TWCR = (1 << TWINT) | (1 << TWSTA) | (1 << TWEN);
-  while (!(TWCR & (1 << TWINT)));
-}
-
-void I2C_stop() {
-  TWCR = (1 << TWINT) | (1 << TWSTO) | (1 << TWEN);
-  while (TWCR & (1 << TWSTO));
-}
-
-bool I2C_write(uint8_t data) {
-  TWDR = data;
-  TWCR = (1 << TWINT) | (1 << TWEN);
-  while (!(TWCR & (1 << TWINT)));
-  return (TWSR & 0xF8) == TW_MT_DATA_ACK;
-}
-
-uint8_t I2C_read(bool ack) {
-  if (ack) {
-    TWCR = (1 << TWINT) | (1 << TWEA) | (1 << TWEN);
-    } else {
-    TWCR = (1 << TWINT) | (1 << TWEN);
-  }
-  while (!(TWCR & (1 << TWINT)));
-  return TWDR;
-}
-
 bool IMU_init() {
-  I2C_init();
-  if (IMU_absent() || IMU_wake() || IMU_set_rate_divider() ||
-      IMU_set_DLPF_bandwidth() || IMU_calibrate()) {
+  char buffer[32];
+  int error = IMU_absent();
+  if (error != 0) {
+    snprintf(buffer, sizeof(buffer), "\nTESTING1, Error: %d", error);
+    UART_send_string(buffer);
     return false;
-      }
+  }
+  if (IMU_wake()) {
+    UART_send_string("\nTESTING2");
+    return false;
+  }
+  if (IMU_set_rate_divider()) {
+    UART_send_string("\nTESTING3");
+    return false;
+  }
+  error = IMU_set_DLPF_bandwidth();
+  if (error != 0) {
+    snprintf(buffer, sizeof(buffer), "\nTESTING4, Error: %d", error);
+    UART_send_string(buffer);
+    return false;
+  }
+  if (IMU_calibrate()) {
+    UART_send_string("\nTESTING5");
+    return false;
+  }
 
   IMU.DIRECTIONS.TIME = GENERAL_millis();
 
@@ -371,8 +544,8 @@ void IMU_update_yaw() {
 int IMU_absent() {
     uint8_t val;
     int error= IMU_read_8(0x75,&val);
-    if( error!=0 ) return error;
-    if( val!= 0x68 ) return -1;
+    if( error != 0 ) return error;
+    if( val!= 0x68 ) return 69420;
     return 0;
 }
 
@@ -384,9 +557,9 @@ bool IMU_set_rate_divider() {
   return IMU_write_8(0x19, 6);
 }
 
-bool IMU_set_DLPF_bandwidth() {
+int IMU_set_DLPF_bandwidth() {
   uint8_t val;
-  if (IMU_read_8(0x1A, &val)) return true;
+  if (IMU_read_8(0x1A, &val)) return -1;
   val = (val & 0b11111000) | 0;
   return IMU_write_8(0x1A, val);
 }
@@ -404,75 +577,130 @@ bool IMU_calibrate() {
   return false;
 }
 
+void IMU_begin_transmission() {
+  _IMU_transmitting = 1;
+  _IMU_transmit_buffer_index = 0;
+  _IMU_transmit_buffer_length = 0;
+}
 
-// Read 'value' from the registers starting at 'addr'. Returns error; see error_str() for explanation.
-bool IMU_read_8(uint8_t addr, uint8_t *value) {
+int IMU_write(uint8_t data) {
+  if (_IMU_transmitting) {
+    if (_IMU_transmit_buffer_length >= 32) {
+       return 0;
+    }
+    _IMU_transmit_buffer[_IMU_transmit_buffer_index] = data;
+    ++_IMU_transmit_buffer_index;
+    _IMU_transmit_buffer_length = _IMU_transmit_buffer_index;
+  } else {
+    TWI_transmit(&data, 1);
+  }
+
+  return 1;
+}
+
+uint8_t IMU_end_transmission(uint8_t send_stop) {
+  uint8_t ret = TWI_write(MPU6050_ADDRESS, _IMU_transmit_buffer, _IMU_transmit_buffer_length, 1, send_stop);
+  _IMU_transmit_buffer_index = 0;
+  _IMU_transmit_buffer_length = 0;
+  _IMU_transmitting = 0;
+  return ret;
+}
+
+uint8_t IMU_request_from(uint8_t address, uint8_t quantity, uint8_t send_stop) {
+  if (quantity > TWI_BUFFER_LENGTH) {
+    quantity = TWI_BUFFER_LENGTH;
+  }
+
+  uint8_t read = TWI_read(address, _IMU_receive_buffer, quantity, send_stop);
+  _IMU_receive_buffer_index = 0;
+  _IMU_receive_buffer_length = read;
+
+  return read;
+}
+
+int IMU_read() {
+  int value = -1;
+  if (_IMU_receive_buffer_index < _IMU_receive_buffer_length) {
+    value = _IMU_receive_buffer[_IMU_receive_buffer_index];
+    ++_IMU_receive_buffer_index;
+  }
+
+  return value;
+}
+
+int IMU_read_8(uint8_t addr, uint8_t *value) {
     *value=0;
-    Wire.beginTransmission(0x68);
-    int r1=Wire.write(addr);                                       if( r1!=1 ) return 10;
-    int r2=Wire.endTransmission(false);                            if( r2!=0 ) return 2;
-    int r3=Wire.requestFrom(0x68,(uint8_t)1,(uint8_t)true); if( r3!=1 ) return 11;
-    *value=Wire.read();
+    IMU_begin_transmission();
+    int r1 = IMU_write(addr);
+    if( r1 != 1 ) return -1;
+    int r2 = IMU_end_transmission(false);                            
+    if( r2 != 0 ) return -2;
+    int r3 = IMU_request_from(MPU6050_ADDRESS,(uint8_t)1,(uint8_t)true);
+    if( r3 != 1 ) return r3;
+    *value = IMU_read();
     return 0;
 }
 
-// Read 3x'value' from the 3 registers starting at 'addr'. Returns error; see error_str() for explanation.
 bool IMU_read_3x16(uint8_t addr, uint16_t *value0,  uint16_t *value1, uint16_t *value2 ) {
     *value0= *value1= *value2= 0;
-    Wire.beginTransmission(0x68);
-    int r1=Wire.write(addr);                                       if( r1!=1 ) return 10;
-    int r2=Wire.endTransmission(false);                            if( r2!=0 ) return r2;
-    int r3=Wire.requestFrom(0x68,(uint8_t)6,(uint8_t)true); if( r3!=6 ) return 11;
-    *value0=Wire.read()<<8 | Wire.read(); 
-    *value1=Wire.read()<<8 | Wire.read(); 
-    *value2=Wire.read()<<8 | Wire.read(); 
-    return 0;
+    IMU_begin_transmission();
+    int r1 = IMU_write(addr);
+    if( r1!=1 ) return true;
+    int r2 = IMU_end_transmission(false);
+    if( r2!=0 ) return true;
+    int r3 = IMU_request_from(MPU6050_ADDRESS,(uint8_t)6,(uint8_t)true);
+    if( r3!=6 ) return true;
+    *value0 = IMU_read() << 8 | IMU_read(); 
+    *value1 = IMU_read() << 8 | IMU_read(); 
+    *value2 = IMU_read() << 8 | IMU_read(); 
+    return false;
 }
 
-// Write 'value' to register at address 'addr'. Returns error; see error_str() for explanation.
 bool IMU_write_8(uint8_t addr, uint8_t value) {
-    Wire.beginTransmission(0x68);
-    int r1=Wire.write(addr);                                       if( r1!=1 ) return 10;
-    int r2=Wire.write(value);                                      if( r2!=1 ) return 10;
-    int r3=Wire.endTransmission(true);                             if( r3!=0 ) return r3;
+    IMU_begin_transmission();
+    int r1 = IMU_write(addr);
+    if( r1!=1 ) return 10;
+    int r2 = IMU_write(value);
+    if( r2!=1 ) return 10;
+    int r3 = IMU_end_transmission(true);
+    if( r3!=0 ) return r3;
     return 0;
 }
 
+//// Read 'value' from the registers starting at 'addr'. Returns error; see error_str() for explanation.
 //bool IMU_read_8(uint8_t addr, uint8_t *value) {
-//  I2C_start();
-//  if (!I2C_write(0x68 << 1)) return true;
-//  if (!I2C_write(addr)) return true;
-//  I2C_start();
-//  if (!I2C_write((0x68 << 1) | 1)) return true;
-//  *value = I2C_read(false);
-//  I2C_stop();
-//  return false;
+//    *value=0;
+//    Wire.beginTransmission(0x68);
+//    int r1=Wire.write(addr);                                       if( r1!=1 ) return 10;
+//    int r2=Wire.endTransmission(false);                            if( r2!=0 ) return 2;
+//    int r3=Wire.requestFrom(0x68,(uint8_t)1,(uint8_t)true); if( r3!=1 ) return 11;
+//    *value=Wire.read();
+//    return 0;
 //}
 //
-//bool IMU_read_3x16(uint8_t addr, uint16_t *value0, uint16_t *value1, uint16_t *value2) {
-//  I2C_start();
-//  if (!I2C_write(0x68 << 1)) return true;
-//  if (!I2C_write(addr)) return true;
-//  I2C_start();
-//  if (!I2C_write((0x68 << 1) | 1)) return true;
-//  *value0 = (I2C_read(true) << 8) | I2C_read(true);
-//  *value1 = (I2C_read(true) << 8) | I2C_read(true);
-//  *value2 = (I2C_read(true) << 8) | I2C_read(false);
-//  I2C_stop();
-//  return false;
+//// Read 3x'value' from the 3 registers starting at 'addr'. Returns error; see error_str() for explanation.
+//bool IMU_read_3x16(uint8_t addr, uint16_t *value0,  uint16_t *value1, uint16_t *value2 ) {
+//    *value0= *value1= *value2= 0;
+//    Wire.beginTransmission(0x68);
+//    int r1=Wire.write(addr);                                       if( r1!=1 ) return 10;
+//    int r2=Wire.endTransmission(false);                            if( r2!=0 ) return r2;
+//    int r3=Wire.requestFrom(0x68,(uint8_t)6,(uint8_t)true); if( r3!=6 ) return 11;
+//    *value0=Wire.read()<<8 | Wire.read(); 
+//    *value1=Wire.read()<<8 | Wire.read(); 
+//    *value2=Wire.read()<<8 | Wire.read(); 
+//    return 0;
 //}
 //
+//// Write 'value' to register at address 'addr'. Returns error; see error_str() for explanation.
 //bool IMU_write_8(uint8_t addr, uint8_t value) {
-//  I2C_start();
-//  if (!I2C_write(0x68 << 1)) return true;
-//  if (!I2C_write(addr)) return true;
-//  if (!I2C_write(value)) return true;
-//  I2C_stop();
-//  return false;
+//    Wire.beginTransmission(0x68);
+//    int r1=Wire.write(addr);                                       if( r1!=1 ) return 10;
+//    int r2=Wire.write(value);                                      if( r2!=1 ) return 10;
+//    int r3=Wire.endTransmission(true);                             if( r3!=0 ) return r3;
+//    return 0;
 //}
 
-unsigned long GENERAL_millis()
-{
+unsigned long GENERAL_millis() {
   unsigned long m;
   uint8_t oldSREG = SREG;
   
@@ -481,6 +709,33 @@ unsigned long GENERAL_millis()
   SREG = oldSREG;
 
   return m;
+}
+
+unsigned long GENERAL_micros() {
+  unsigned long m;
+  uint8_t oldSREG = SREG, t;
+  
+  cli();
+  m = _timer0_overflow_count;
+#if defined(TCNT0)
+  t = TCNT0;
+#elif defined(TCNT0L)
+  t = TCNT0L;
+#else
+  #error TIMER 0 not defined
+#endif
+
+#ifdef TIFR0
+  if ((TIFR0 & _BV(TOV0)) && (t < 255))
+    m++;
+#else
+  if ((TIFR & _BV(TOV0)) && (t < 255))
+    m++;
+#endif
+
+  SREG = oldSREG;
+  
+  return ((m << 8) + t) * (64 / clockCyclesPerMicrosecond());
 }
 
 void GENERAL_init_timer0() {
@@ -559,7 +814,7 @@ void GENERAL_make_turn(float opening_angle) {
 }
 
 int main(void) {
-  Wire.begin();
+  TWI_init();
   GENERAL_init_timer0();
   GENERAL_init_interrupts();
   GENERAL_init_ports();
@@ -589,8 +844,7 @@ int main(void) {
   }
 }
 
-ISR(TIMER0_OVF_vect) 
-{
+ISR(TIMER0_OVF_vect) {
   unsigned long m = _timer0_millis;
   unsigned char f = _timer0_fract;
 
@@ -605,3 +859,56 @@ ISR(TIMER0_OVF_vect)
   _timer0_millis = m;
   _timer0_overflow_count++;
 }
+//ISR(TWI_vect) {
+//  switch (TW_STATUS) {
+//    case TW_START:
+//    case TW_REP_START:
+//      TWDR = _TWI_slarw;
+//      TWCR = (1 << TWINT) | (1 << TWEN) | (1 << TWIE) | (1 << TWEA);
+//      break;
+//    case TW_MT_SLA_ACK:
+//    case TW_MT_DATA_ACK:
+//      if (_TWI_master_buffer_index < _TWI_master_buffer_length) {
+//        TWDR = _TWI_master_buffer[_TWI_master_buffer_index++];
+//        TWCR = (1 << TWINT) | (1 << TWEN) | (1 << TWIE) | (1 << TWEA);
+//      } else {
+//        if (_TWI_send_stop) {
+//          TWCR = (1 << TWINT) | (1 << TWEN) | (1 << TWIE) | (1 << TWEA) | (1 << TWSTO);
+//        } else {
+//          _TWI_in_rep_start = true;
+//          TWCR = (1 << TWINT) | (1 << TWEN) | (1 << TWIE) | (1 << TWSTA);
+//        }
+//        _TWI_state = 0;
+//      }
+//      break;
+//    case TW_MR_DATA_ACK:
+//      _TWI_master_buffer[_TWI_master_buffer_index++] = TWDR;
+//    case TW_MR_SLA_ACK:
+//      if (_TWI_master_buffer_index < _TWI_master_buffer_length) {
+//        TWCR = (1 << TWINT) | (1 << TWEN) | (1 << TWIE) | (1 << TWEA);
+//      } else {
+//        TWCR = (1 << TWINT) | (1 << TWEN) | (1 << TWIE);
+//      }
+//      break;
+//    case TW_MR_DATA_NACK:
+//      _TWI_master_buffer[_TWI_master_buffer_index++] = TWDR;
+//      if (_TWI_send_stop) {
+//        TWCR = (1 << TWINT) | (1 << TWEN) | (1 << TWIE) | (1 << TWEA) | (1 << TWSTO);
+//      } else {
+//        _TWI_in_rep_start = true;
+//        TWCR = (1 << TWINT) | (1 << TWEN) | (1 << TWIE) | (1 << TWSTA);
+//      }
+//      _TWI_state = 0;
+//      break;
+//    case TW_MT_SLA_NACK:
+//    case TW_MT_DATA_NACK:
+//    case TW_MR_SLA_NACK:
+//    case TW_BUS_ERROR:
+//      _TWI_error = TW_STATUS;
+//      if (_TWI_send_stop) {
+//        TWCR = (1 << TWINT) | (1 << TWSTO) | (1 << TWEN);
+//      }
+//      _TWI_state = 0;
+//      break;
+//  }
+//}
